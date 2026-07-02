@@ -182,6 +182,152 @@ public class PipeHistoricalDataRegionTsFileAndDeletionSourceTest {
   }
 
   @Test
+  public void testHistoricalTsFileFlushTimeOrderDefaultsToTrue() throws Exception {
+    final PipeHistoricalDataRegionTsFileAndDeletionSource source =
+        new PipeHistoricalDataRegionTsFileAndDeletionSource();
+
+    source.validate(new PipeParameterValidator(new PipeParameters(new HashMap<>())));
+
+    Assert.assertTrue((Boolean) getPrivateField(source, "shouldOrderHistoricalTsFileByFlushTime"));
+  }
+
+  @Test
+  public void testHistoricalTsFileFlushTimeOrderSortsOlderFlushTimeFirst() throws Exception {
+    final PipeHistoricalDataRegionTsFileAndDeletionSource source =
+        new PipeHistoricalDataRegionTsFileAndDeletionSource();
+    final File tempDir = Files.createTempDirectory("pipeHistoricalTsFileOrder").toFile();
+
+    try {
+      final TsFileResource seqOlderFlushTimeNewerVersion =
+          createTsFileResource(tempDir, "50-3-0-0.tsfile");
+      seqOlderFlushTimeNewerVersion.setSeq(true);
+      final TsFileResource seqSameFlushTimeOlderVersion =
+          createTsFileResource(tempDir, "100-1-0-0.tsfile");
+      seqSameFlushTimeOlderVersion.setSeq(true);
+      final TsFileResource seqSameFlushTimeNewerVersion =
+          createTsFileResource(tempDir, "100-2-0-0.tsfile");
+      seqSameFlushTimeNewerVersion.setSeq(true);
+      final TsFileResource unseqOldestFlushTime = createTsFileResource(tempDir, "1-1-0-0.tsfile");
+      unseqOldestFlushTime.setSeq(false);
+
+      setPrivateField(source, "shouldOrderHistoricalTsFileByFlushTime", true);
+      setPrivateField(source, "shouldExtractInsertion", true);
+      setPrivateField(source, "shouldExtractDeletion", false);
+      setPrivateField(source, "startIndex", MinimumProgressIndex.INSTANCE);
+
+      final List<PersistentResource> resources =
+          new ArrayList<>(
+              Arrays.asList(
+                  unseqOldestFlushTime,
+                  seqSameFlushTimeNewerVersion,
+                  seqSameFlushTimeOlderVersion,
+                  seqOlderFlushTimeNewerVersion));
+      sortExtractedResources(source, resources);
+
+      Assert.assertEquals(
+          Arrays.asList(
+              seqOlderFlushTimeNewerVersion,
+              seqSameFlushTimeOlderVersion,
+              seqSameFlushTimeNewerVersion,
+              unseqOldestFlushTime),
+          resources);
+    } finally {
+      FileUtils.deleteFileOrDirectory(tempDir);
+    }
+  }
+
+  @Test
+  public void testHistoricalTsFileFlushTimeOrderCanBeDisabled() throws Exception {
+    final PipeHistoricalDataRegionTsFileAndDeletionSource source =
+        new PipeHistoricalDataRegionTsFileAndDeletionSource();
+    final PipeParameters parameters =
+        new PipeParameters(
+            new HashMap<String, String>() {
+              {
+                put(
+                    PipeSourceConstant.SOURCE_HISTORY_TSFILE_ORDER_BY_FLUSH_TIME_KEY,
+                    Boolean.FALSE.toString());
+              }
+            });
+    final File tempDir = Files.createTempDirectory("pipeHistoricalTsFileProgressOrder").toFile();
+
+    try {
+      source.validate(new PipeParameterValidator(parameters));
+      final TsFileResource earlierProgressIndex = createTsFileResource(tempDir, "300-1-0-0.tsfile");
+      earlierProgressIndex.updateProgressIndex(new SimpleProgressIndex(0, 1));
+      final TsFileResource laterProgressIndex = createTsFileResource(tempDir, "100-1-0-0.tsfile");
+      laterProgressIndex.updateProgressIndex(new SimpleProgressIndex(0, 2));
+
+      setPrivateField(source, "shouldExtractInsertion", true);
+      setPrivateField(source, "shouldExtractDeletion", false);
+      setPrivateField(source, "startIndex", MinimumProgressIndex.INSTANCE);
+
+      final List<PersistentResource> resources =
+          new ArrayList<>(Arrays.asList(laterProgressIndex, earlierProgressIndex));
+      sortExtractedResources(source, resources);
+
+      Assert.assertFalse(
+          (Boolean) getPrivateField(source, "shouldOrderHistoricalTsFileByFlushTime"));
+      Assert.assertEquals(Arrays.asList(earlierProgressIndex, laterProgressIndex), resources);
+    } finally {
+      FileUtils.deleteFileOrDirectory(tempDir);
+    }
+  }
+
+  @Test
+  public void testFlushTimeOrderReportsProgressAfterAllHistoricalResources() throws Exception {
+    final PipeHistoricalDataRegionTsFileAndDeletionSource source =
+        new PipeHistoricalDataRegionTsFileAndDeletionSource();
+    final ProgressIndex expectedProgressIndex = new SimpleProgressIndex(0, 10);
+
+    setPrivateField(source, "hasBeenStarted", true);
+    setPrivateField(source, "pipeName", "pipe");
+    setPrivateField(source, "creationTime", 1L);
+    setPrivateField(source, "dataRegionId", 1);
+    setPrivateField(source, "pipeTaskMeta", new PipeTaskMeta(MinimumProgressIndex.INSTANCE, 1));
+    setPrivateField(source, "pendingQueue", new ArrayDeque<PersistentResource>());
+    setPrivateField(source, "maxHistoricalProgressIndex", expectedProgressIndex);
+    setPrivateField(source, "shouldReportMaxHistoricalProgressIndex", true);
+
+    final Event event = source.supply();
+
+    Assert.assertTrue(event instanceof ProgressReportEvent);
+    Assert.assertEquals(expectedProgressIndex, ((ProgressReportEvent) event).getProgressIndex());
+    Assert.assertFalse((Boolean) getPrivateField(source, "shouldReportMaxHistoricalProgressIndex"));
+  }
+
+  @Test
+  @SuppressWarnings("unchecked")
+  public void testFlushTimeOrderProgressOnlyCoversSelectedResources() throws Exception {
+    final PipeHistoricalDataRegionTsFileAndDeletionSource source =
+        new PipeHistoricalDataRegionTsFileAndDeletionSource();
+    final File tempDir = Files.createTempDirectory("pipeHistoricalTsFileSelectedProgress").toFile();
+
+    try {
+      final TsFileResource selectedResource = createTsFileResource(tempDir, "100-1-0-0.tsfile");
+      selectedResource.updateProgressIndex(new SimpleProgressIndex(0, 1));
+      final TsFileResource filteredResource = createTsFileResource(tempDir, "200-1-0-0.tsfile");
+      filteredResource.updateProgressIndex(new SimpleProgressIndex(0, 100));
+
+      ((Map<TsFileResource, Set<String>>)
+              getPrivateField(source, "filteredTsFileResources2TableNames"))
+          .put(selectedResource, Set.of());
+
+      final List<PersistentResource> resources =
+          new ArrayList<>(Arrays.asList(filteredResource, selectedResource));
+      prepareResourcesForHistoricalTsFileFlushTimeOrder(source, resources);
+
+      Assert.assertEquals(Arrays.asList(selectedResource), resources);
+      Assert.assertEquals(
+          new SimpleProgressIndex(0, 1), getPrivateField(source, "maxHistoricalProgressIndex"));
+      Assert.assertTrue(
+          (Boolean) getPrivateField(source, "shouldReportMaxHistoricalProgressIndex"));
+    } finally {
+      FileUtils.deleteFileOrDirectory(tempDir);
+    }
+  }
+
+  @Test
   public void testReplicateIndexShouldBeStableBeforeResourceConsumed() throws Exception {
     final TestablePipeHistoricalDataRegionTsFileAndDeletionSource source =
         new TestablePipeHistoricalDataRegionTsFileAndDeletionSource();
@@ -300,6 +446,28 @@ public class PipeHistoricalDataRegionTsFileAndDeletionSourceTest {
       result = result.updateToMinimumEqualOrIsAfterProgressIndex(progressIndex);
     }
     return result;
+  }
+
+  private static void sortExtractedResources(
+      final PipeHistoricalDataRegionTsFileAndDeletionSource source,
+      final List<PersistentResource> resources)
+      throws ReflectiveOperationException {
+    final Method method =
+        PipeHistoricalDataRegionTsFileAndDeletionSource.class.getDeclaredMethod(
+            "sortExtractedResources", List.class);
+    method.setAccessible(true);
+    method.invoke(source, resources);
+  }
+
+  private static void prepareResourcesForHistoricalTsFileFlushTimeOrder(
+      final PipeHistoricalDataRegionTsFileAndDeletionSource source,
+      final List<PersistentResource> resources)
+      throws ReflectiveOperationException {
+    final Method method =
+        PipeHistoricalDataRegionTsFileAndDeletionSource.class.getDeclaredMethod(
+            "prepareResourcesForHistoricalTsFileFlushTimeOrder", List.class);
+    method.setAccessible(true);
+    method.invoke(source, resources);
   }
 
   private static void setPrivateField(
