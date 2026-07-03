@@ -23,6 +23,7 @@ import org.apache.iotdb.metrics.MetricConstant;
 import org.apache.iotdb.metrics.config.MetricConfig;
 import org.apache.iotdb.metrics.config.MetricConfigDescriptor;
 import org.apache.iotdb.metrics.i18n.MetricsMessages;
+import org.apache.iotdb.metrics.utils.FailureLogState;
 import org.apache.iotdb.metrics.utils.MetricLevel;
 
 import org.slf4j.Logger;
@@ -42,7 +43,6 @@ import java.util.Map;
 import java.util.Objects;
 import java.util.Scanner;
 import java.util.Set;
-import java.util.concurrent.TimeUnit;
 import java.util.stream.Collectors;
 
 public class LinuxNetMetricManager implements INetMetricManager {
@@ -56,7 +56,6 @@ public class LinuxNetMetricManager implements INetMetricManager {
 
   private static final String BYTES = "bytes";
   private static final String PACKETS = "packets";
-  private static final long FAILURE_LOG_INTERVAL = TimeUnit.MINUTES.toMillis(5);
 
   private static final int IFACE_NAME_INDEX = 0;
 
@@ -280,29 +279,10 @@ public class LinuxNetMetricManager implements INetMetricManager {
   }
 
   static boolean shouldLogFailure(FailureLogState failureLogState, String failureMessage) {
-    return failureLogState.shouldLog(failureMessage, System.currentTimeMillis());
+    return failureLogState.shouldLog(failureMessage);
   }
 
   static void clearFailureLogState(FailureLogState failureLogState) {
     failureLogState.clear();
-  }
-
-  static class FailureLogState {
-    private long nextLogTime = 0L;
-    private String lastFailure = "";
-
-    private synchronized boolean shouldLog(String failureMessage, long currentTime) {
-      if (!failureMessage.equals(lastFailure) || currentTime >= nextLogTime) {
-        lastFailure = failureMessage;
-        nextLogTime = currentTime + FAILURE_LOG_INTERVAL;
-        return true;
-      }
-      return false;
-    }
-
-    private synchronized void clear() {
-      lastFailure = "";
-      nextLogTime = 0L;
-    }
   }
 }

@@ -26,6 +26,7 @@ import org.apache.iotdb.metrics.config.MetricConfig.IoTDBReporterConfig;
 import org.apache.iotdb.metrics.config.MetricConfigDescriptor;
 import org.apache.iotdb.metrics.i18n.MetricsMessages;
 import org.apache.iotdb.metrics.type.IMetric;
+import org.apache.iotdb.metrics.utils.FailureLogState;
 import org.apache.iotdb.metrics.utils.IoTDBMetricsUtils;
 import org.apache.iotdb.metrics.utils.MetricInfo;
 import org.apache.iotdb.metrics.utils.ReporterType;
@@ -48,7 +49,6 @@ import java.util.concurrent.TimeUnit;
 
 public class IoTDBSessionReporter extends IoTDBReporter {
   private static final Logger LOGGER = LoggerFactory.getLogger(IoTDBSessionReporter.class);
-  private static final long FAILURE_LOG_INTERVAL = TimeUnit.MINUTES.toMillis(5);
   private static final MetricConfig metricConfig =
       MetricConfigDescriptor.getInstance().getMetricConfig();
   private static final IoTDBReporterConfig ioTDBReporterConfig =
@@ -219,29 +219,10 @@ public class IoTDBSessionReporter extends IoTDBReporter {
   }
 
   static boolean shouldLogFailure(FailureLogState failureLogState, String failureMessage) {
-    return failureLogState.shouldLog(failureMessage, System.currentTimeMillis());
+    return failureLogState.shouldLog(failureMessage);
   }
 
   static void clearFailureLogState(FailureLogState failureLogState) {
     failureLogState.clear();
-  }
-
-  static class FailureLogState {
-    private long nextLogTime = 0L;
-    private String lastFailure = "";
-
-    private synchronized boolean shouldLog(String failureMessage, long currentTime) {
-      if (!failureMessage.equals(lastFailure) || currentTime >= nextLogTime) {
-        lastFailure = failureMessage;
-        nextLogTime = currentTime + FAILURE_LOG_INTERVAL;
-        return true;
-      }
-      return false;
-    }
-
-    private synchronized void clear() {
-      lastFailure = "";
-      nextLogTime = 0L;
-    }
   }
 }

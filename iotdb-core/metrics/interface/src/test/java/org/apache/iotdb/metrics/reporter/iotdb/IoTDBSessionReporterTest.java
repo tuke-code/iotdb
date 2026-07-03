@@ -20,16 +20,18 @@
 package org.apache.iotdb.metrics.reporter.iotdb;
 
 import org.apache.iotdb.metrics.i18n.MetricsMessages;
+import org.apache.iotdb.metrics.utils.FailureLogState;
 
 import org.junit.Assert;
 import org.junit.Test;
+
+import java.util.concurrent.TimeUnit;
 
 public class IoTDBSessionReporterTest {
 
   @Test
   public void failureLogStateSuppressesContinuousFailureUntilRecovery() {
-    IoTDBSessionReporter.FailureLogState failureLogState =
-        new IoTDBSessionReporter.FailureLogState();
+    FailureLogState failureLogState = new FailureLogState();
 
     Assert.assertTrue(
         IoTDBSessionReporter.shouldLogFailure(
@@ -47,8 +49,7 @@ public class IoTDBSessionReporterTest {
 
   @Test
   public void differentFailureMessageLogsImmediately() {
-    IoTDBSessionReporter.FailureLogState failureLogState =
-        new IoTDBSessionReporter.FailureLogState();
+    FailureLogState failureLogState = new FailureLogState();
 
     Assert.assertTrue(
         IoTDBSessionReporter.shouldLogFailure(
@@ -56,5 +57,15 @@ public class IoTDBSessionReporterTest {
     Assert.assertTrue(
         IoTDBSessionReporter.shouldLogFailure(
             failureLogState, MetricsMessages.IOTDB_SESSION_REPORTER_START_FAILED));
+  }
+
+  @Test
+  public void sameFailureMessageLogsAfterInterval() {
+    FailureLogState failureLogState = new FailureLogState();
+    String failureMessage = MetricsMessages.IOTDB_SESSION_REPORTER_INSERT_FAILED;
+
+    Assert.assertTrue(failureLogState.shouldLog(failureMessage, 0L));
+    Assert.assertFalse(failureLogState.shouldLog(failureMessage, TimeUnit.MINUTES.toMillis(5) - 1));
+    Assert.assertTrue(failureLogState.shouldLog(failureMessage, TimeUnit.MINUTES.toMillis(5)));
   }
 }

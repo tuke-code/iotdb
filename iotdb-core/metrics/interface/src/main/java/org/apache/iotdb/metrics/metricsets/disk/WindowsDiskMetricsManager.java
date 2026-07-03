@@ -21,6 +21,7 @@ package org.apache.iotdb.metrics.metricsets.disk;
 
 import org.apache.iotdb.metrics.config.MetricConfigDescriptor;
 import org.apache.iotdb.metrics.i18n.MetricsMessages;
+import org.apache.iotdb.metrics.utils.FailureLogState;
 
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
@@ -608,7 +609,7 @@ public class WindowsDiskMetricsManager implements IDiskMetricsManager {
   }
 
   static boolean shouldLogFailure(FailureLogState failureLogState, String failureMessage) {
-    return failureLogState.shouldLog(failureMessage, System.currentTimeMillis());
+    return failureLogState.shouldLog(failureMessage);
   }
 
   static void clearFailureLogState(FailureLogState failureLogState) {
@@ -639,25 +640,6 @@ public class WindowsDiskMetricsManager implements IDiskMetricsManager {
       return Charset.forName("GBK");
     }
     return Charset.defaultCharset();
-  }
-
-  static class FailureLogState {
-    private long nextLogTime = 0L;
-    private String lastFailure = "";
-
-    private synchronized boolean shouldLog(String failureMessage, long currentTime) {
-      if (!failureMessage.equals(lastFailure) || currentTime >= nextLogTime) {
-        lastFailure = failureMessage;
-        nextLogTime = currentTime + FAILURE_LOG_INTERVAL;
-        return true;
-      }
-      return false;
-    }
-
-    private synchronized void clear() {
-      lastFailure = "";
-      nextLogTime = 0L;
-    }
   }
 
   private static String resolvePowerShellExecutable() {

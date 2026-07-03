@@ -21,6 +21,7 @@ package org.apache.iotdb.metrics.metricsets.disk;
 
 import org.apache.iotdb.metrics.config.MetricConfigDescriptor;
 import org.apache.iotdb.metrics.i18n.MetricsMessages;
+import org.apache.iotdb.metrics.utils.FailureLogState;
 
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
@@ -35,7 +36,6 @@ import java.util.HashMap;
 import java.util.Map;
 import java.util.Scanner;
 import java.util.Set;
-import java.util.concurrent.TimeUnit;
 import java.util.stream.Collectors;
 
 /**
@@ -81,7 +81,6 @@ public class LinuxDiskMetricsManager implements IDiskMetricsManager {
   private static final int DEFAULT_SECTOR_SIZE = 512;
   private static final double BYTES_PER_KB = 1024.0;
   private static final long UPDATE_SMALLEST_INTERVAL = 10000L;
-  private static final long FAILURE_LOG_INTERVAL = TimeUnit.MINUTES.toMillis(5);
   private Set<String> diskIdSet;
   private final Map<String, Integer> diskSectorSizeMap;
   private long lastUpdateTime = 0L;
@@ -531,30 +530,11 @@ public class LinuxDiskMetricsManager implements IDiskMetricsManager {
   }
 
   static boolean shouldLogFailure(FailureLogState failureLogState, String failureMessage) {
-    return failureLogState.shouldLog(failureMessage, System.currentTimeMillis());
+    return failureLogState.shouldLog(failureMessage);
   }
 
   static void clearFailureLogState(FailureLogState failureLogState) {
     failureLogState.clear();
-  }
-
-  static class FailureLogState {
-    private long nextLogTime = 0L;
-    private String lastFailure = "";
-
-    private synchronized boolean shouldLog(String failureMessage, long currentTime) {
-      if (!failureMessage.equals(lastFailure) || currentTime >= nextLogTime) {
-        lastFailure = failureMessage;
-        nextLogTime = currentTime + FAILURE_LOG_INTERVAL;
-        return true;
-      }
-      return false;
-    }
-
-    private synchronized void clear() {
-      lastFailure = "";
-      nextLogTime = 0L;
-    }
   }
 
   private void checkUpdate() {
