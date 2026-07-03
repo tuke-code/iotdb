@@ -929,47 +929,7 @@ public class InsertTabletNode extends InsertNode implements WALEntryValue {
   }
 
   @Override
-  protected int getValidMeasurementNumber() {
-    int validMeasurementNumber = 0;
-    for (int i = 0; measurements != null && i < measurements.length; i++) {
-      if (shouldSerializeMeasurement(i)) {
-        validMeasurementNumber++;
-      }
-    }
-    return validMeasurementNumber;
-  }
-
-  protected int getValidMeasurementNumberForWAL() {
-    int validMeasurementNumber = 0;
-    for (int i = 0; measurements != null && i < measurements.length; i++) {
-      if (shouldSerializeMeasurementToWAL(i)) {
-        validMeasurementNumber++;
-      }
-    }
-    return validMeasurementNumber;
-  }
-
-  @Override
-  protected int serializeMeasurementSchemasSize() {
-    int byteLen = 0;
-    for (int i = 0; measurements != null && i < measurements.length; i++) {
-      if (shouldSerializeMeasurementToWAL(i)) {
-        byteLen += WALWriteUtils.sizeToWrite(measurementSchemas[i]);
-      }
-    }
-    return byteLen;
-  }
-
-  @Override
-  protected void serializeMeasurementSchemasToWAL(IWALByteBufferView buffer) {
-    for (int i = 0; measurements != null && i < measurements.length; i++) {
-      if (shouldSerializeMeasurementToWAL(i)) {
-        WALWriteUtils.write(measurementSchemas[i], buffer);
-      }
-    }
-  }
-
-  private boolean shouldSerializeMeasurement(int index) {
+  protected boolean shouldSerializeMeasurement(final int index) {
     return measurements != null
         && index >= 0
         && index < measurements.length
@@ -984,7 +944,8 @@ public class InsertTabletNode extends InsertNode implements WALEntryValue {
         && columns[index] != null;
   }
 
-  private boolean shouldSerializeMeasurementToWAL(int index) {
+  @Override
+  protected boolean shouldSerializeMeasurementToWAL(final int index) {
     return shouldSerializeMeasurement(index)
         && measurementSchemas != null
         && index < measurementSchemas.length
