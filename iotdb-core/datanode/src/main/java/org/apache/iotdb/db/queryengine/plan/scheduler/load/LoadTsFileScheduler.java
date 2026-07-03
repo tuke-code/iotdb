@@ -251,11 +251,19 @@ public class LoadTsFileScheduler implements IScheduler {
 
           if (isLoadSingleTsFileSuccess) {
             node.clean();
-            LOGGER.info(
-                "Load TsFile {} Successfully, load process [{}/{}]",
-                filePath,
-                i + 1,
-                tsFileNodeListSize);
+            if (isGeneratedByPipe) {
+              LOGGER.debug(
+                  "Load TsFile {} Successfully, load process [{}/{}]",
+                  filePath,
+                  i + 1,
+                  tsFileNodeListSize);
+            } else {
+              LOGGER.info(
+                  "Load TsFile {} Successfully, load process [{}/{}]",
+                  filePath,
+                  i + 1,
+                  tsFileNodeListSize);
+            }
           } else {
             isLoadSuccess = false;
             failedTsFileNodeIndexes.add(i);
@@ -308,6 +316,7 @@ public class LoadTsFileScheduler implements IScheduler {
         }
       }
     } finally {
+      dispatcher.close();
       LoadTsFileMemoryManager.getInstance().releaseDataCacheMemoryBlock();
     }
   }
@@ -398,7 +407,11 @@ public class LoadTsFileScheduler implements IScheduler {
 
   private boolean secondPhase(
       boolean isFirstPhaseSuccess, String uuid, TsFileResource tsFileResource) {
-    LOGGER.info(DataNodeQueryMessages.START_DISPATCHING_LOAD_COMMAND_FOR_UUID, uuid);
+    if (isGeneratedByPipe) {
+      LOGGER.debug(DataNodeQueryMessages.START_DISPATCHING_LOAD_COMMAND_FOR_UUID, uuid);
+    } else {
+      LOGGER.info(DataNodeQueryMessages.START_DISPATCHING_LOAD_COMMAND_FOR_UUID, uuid);
+    }
     final File tsFile = tsFileResource.getTsFile();
     final TLoadCommandReq loadCommandReq =
         new TLoadCommandReq(
@@ -662,7 +675,7 @@ public class LoadTsFileScheduler implements IScheduler {
 
   @Override
   public void stop(Throwable t) {
-    // Do nothing
+    dispatcher.abort();
   }
 
   @Override

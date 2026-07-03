@@ -237,7 +237,11 @@ public class LoadTsFileAnalyzer implements AutoCloseable {
       return analysis;
     }
 
-    LOGGER.info(DataNodeQueryMessages.LOAD_ANALYSIS_STAGE_ALL_TSFILES_HAVE_BEEN_ANALYZED);
+    if (isGeneratedByPipe) {
+      LOGGER.debug(DataNodeQueryMessages.LOAD_ANALYSIS_STAGE_ALL_TSFILES_HAVE_BEEN_ANALYZED);
+    } else {
+      LOGGER.info(DataNodeQueryMessages.LOAD_ANALYSIS_STAGE_ALL_TSFILES_HAVE_BEEN_ANALYZED);
+    }
 
     setTsFileModelInfoToStatement();
     if (reconstructStatementIfMiniFileConverted()) {
@@ -318,22 +322,16 @@ public class LoadTsFileAnalyzer implements AutoCloseable {
         if (LOGGER.isWarnEnabled()) {
           LOGGER.warn(DataNodeQueryMessages.TSFILE_IS_EMPTY, tsFile.getPath());
         }
-        if (LOGGER.isInfoEnabled()) {
-          LOGGER.info(
-              "Load - Analysis Stage: {}/{} tsfiles have been analyzed, progress: {}%",
-              i + 1, tsfileNum, String.format("%.3f", (i + 1) * 100.00 / tsfileNum));
-        }
+        logAnalyzeProgress(i + 1, tsfileNum);
+
         continue;
       }
 
       final long startTime = System.nanoTime();
       try {
         analyzeSingleTsFile(tsFile, i);
-        if (LOGGER.isInfoEnabled()) {
-          LOGGER.info(
-              "Load - Analysis Stage: {}/{} tsfiles have been analyzed, progress: {}%",
-              i + 1, tsfileNum, String.format("%.3f", (i + 1) * 100.00 / tsfileNum));
-        }
+        logAnalyzeProgress(i + 1, tsfileNum);
+
       } catch (AuthException e) {
         setFailAnalysisForAuthException(analysis, e);
         return false;
@@ -370,14 +368,39 @@ public class LoadTsFileAnalyzer implements AutoCloseable {
     return true;
   }
 
+  private void logAnalyzeProgress(final int analyzedTsFileNum, final int totalTsFileNum) {
+    if (isGeneratedByPipe && !LOGGER.isDebugEnabled()) {
+      return;
+    }
+    if (!isGeneratedByPipe && !LOGGER.isInfoEnabled()) {
+      return;
+    }
+
+    final String progress = String.format("%.3f", analyzedTsFileNum * 100.00 / totalTsFileNum);
+    if (isGeneratedByPipe) {
+      LOGGER.debug(
+          "Load - Analysis Stage: {}/{} tsfiles have been analyzed, progress: {}%",
+          analyzedTsFileNum, totalTsFileNum, progress);
+    } else {
+      LOGGER.info(
+          "Load - Analysis Stage: {}/{} tsfiles have been analyzed, progress: {}%",
+          analyzedTsFileNum, totalTsFileNum, progress);
+    }
+  }
+
   private void analyzeSingleTsFile(final File tsFile, int i) throws Exception {
     final SessionInfo sessionInfo = context.getSession();
     try (final TsFileSequenceReader reader = new TsFileSequenceReader(tsFile.getAbsolutePath())) {
       // check whether the tsfile is tree-model or not
       final Map<String, TableSchema> tableSchemaMap = reader.getTableSchemaMap();
       final boolean isTableModelFile = Objects.nonNull(tableSchemaMap) && !tableSchemaMap.isEmpty();
-      LOGGER.info(
-          "TsFile {} is a {}-model file.", tsFile.getPath(), isTableModelFile ? "table" : "tree");
+      if (isGeneratedByPipe) {
+        LOGGER.debug(
+            "TsFile {} is a {}-model file.", tsFile.getPath(), isTableModelFile ? "table" : "tree");
+      } else {
+        LOGGER.info(
+            "TsFile {} is a {}-model file.", tsFile.getPath(), isTableModelFile ? "table" : "tree");
+      }
 
       // can be reused when constructing tsfile resource
       final TsFileSequenceReaderTimeseriesMetadataIterator timeseriesMetadataIterator =

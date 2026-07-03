@@ -4144,10 +4144,17 @@ public class DataRegion implements IDataRegionForQuery {
               0);
 
       if (!newFileName.equals(tsfileToBeInserted.getName())) {
-        logger.info(
-            "TsFile {} must be renamed to {} for loading into the unsequence list.",
-            tsfileToBeInserted.getName(),
-            newFileName);
+        if (isGeneratedByPipe) {
+          logger.debug(
+              "TsFile {} must be renamed to {} for loading into the unsequence list.",
+              tsfileToBeInserted.getName(),
+              newFileName);
+        } else {
+          logger.info(
+              "TsFile {} must be renamed to {} for loading into the unsequence list.",
+              tsfileToBeInserted.getName(),
+              newFileName);
+        }
         newTsFileResource.setFile(
             fsFactory.getFile(tsfileToBeInserted.getParentFile(), newFileName));
       }
@@ -4196,7 +4203,11 @@ public class DataRegion implements IDataRegionForQuery {
       }
 
       onTsFileLoaded(newTsFileResource, isFromConsensus, lastReader);
-      logger.info(StorageEngineMessages.TSFILE_LOADED_IN_UNSEQ_LIST, newFileName);
+      if (isGeneratedByPipe) {
+        logger.debug(StorageEngineMessages.TSFILE_LOADED_IN_UNSEQ_LIST, newFileName);
+      } else {
+        logger.info(StorageEngineMessages.TSFILE_LOADED_IN_UNSEQ_LIST, newFileName);
+      }
     } catch (final DiskSpaceInsufficientException e) {
       logger.error(
           "Failed to append the tsfile {} to database processor {} because the disk space is insufficient.",
@@ -4350,10 +4361,17 @@ public class DataRegion implements IDataRegionForQuery {
       return false;
     }
 
-    logger.info(
-        "Load tsfile in unsequence list, move file from {} to {}",
-        tsFileToLoad.getAbsolutePath(),
-        targetFile.getAbsolutePath());
+    if (isGeneratedByPipe) {
+      logger.debug(
+          "Load tsfile in unsequence list, move file from {} to {}",
+          tsFileToLoad.getAbsolutePath(),
+          targetFile.getAbsolutePath());
+    } else {
+      logger.info(
+          "Load tsfile in unsequence list, move file from {} to {}",
+          tsFileToLoad.getAbsolutePath(),
+          targetFile.getAbsolutePath());
+    }
 
     LoadTsFileRateLimiter.getInstance().acquire(tsFileResource.getTsFile().length());
 
