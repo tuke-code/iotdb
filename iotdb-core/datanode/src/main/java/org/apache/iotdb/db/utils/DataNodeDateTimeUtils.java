@@ -157,7 +157,7 @@ public class DataNodeDateTimeUtils {
     for (int i = 0; i < duration.length(); i++) {
       char ch = duration.charAt(i);
       if (Character.isDigit(ch)) {
-        temp = Math.addExact(Math.multiplyExact(temp, 10), ch - '0');
+        temp = Math.addExact(Math.multiplyExact(temp, 10), Character.digit(ch, 10));
       } else {
         String unit = String.valueOf(duration.charAt(i));
         // This is to identify units with two letters.
@@ -233,7 +233,7 @@ public class DataNodeDateTimeUtils {
     for (; i < duration.length(); i++) {
       char ch = duration.charAt(i);
       if (Character.isDigit(ch)) {
-        temp = Math.addExact(Math.multiplyExact(temp, 10), ch - '0');
+        temp = Math.addExact(Math.multiplyExact(temp, 10), Character.digit(ch, 10));
       } else {
         StringBuilder unit = new StringBuilder(String.valueOf(duration.charAt(i)));
         i++;

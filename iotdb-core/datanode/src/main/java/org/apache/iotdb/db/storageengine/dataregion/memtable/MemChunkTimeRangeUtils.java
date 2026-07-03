@@ -47,7 +47,7 @@ final class MemChunkTimeRangeUtils {
           i == effectivePageNum - 1
               ? BigInteger.valueOf(chunkEndTime)
               : chunkStartTimeAsBigInteger
-                  .add(pageTimeInterval.multiply(BigInteger.valueOf(i + 1)))
+                  .add(pageTimeInterval.multiply(BigInteger.valueOf(((long) i) + 1)))
                   .subtract(BigInteger.ONE);
       pageTimeRanges.add(new long[] {pageStartTime.longValue(), pageEndTime.longValue()});
     }
