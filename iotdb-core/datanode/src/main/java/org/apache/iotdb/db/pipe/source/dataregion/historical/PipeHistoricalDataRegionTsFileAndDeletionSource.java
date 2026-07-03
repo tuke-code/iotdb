@@ -59,6 +59,7 @@ import org.apache.iotdb.db.pipe.source.dataregion.realtime.assigner.PipeTsFileEp
 import org.apache.iotdb.db.storageengine.StorageEngine;
 import org.apache.iotdb.db.storageengine.dataregion.DataRegion;
 import org.apache.iotdb.db.storageengine.dataregion.memtable.TsFileProcessor;
+import org.apache.iotdb.db.storageengine.dataregion.read.reader.common.MergeReaderPriority;
 import org.apache.iotdb.db.storageengine.dataregion.tsfile.TsFileManager;
 import org.apache.iotdb.db.storageengine.dataregion.tsfile.TsFileResource;
 import org.apache.iotdb.pipe.api.customizer.configuration.PipeExtractorRuntimeConfiguration;
@@ -99,8 +100,8 @@ import static org.apache.iotdb.commons.pipe.config.constant.PipeSourceConstant.E
 import static org.apache.iotdb.commons.pipe.config.constant.PipeSourceConstant.EXTRACTOR_HISTORY_LOOSE_RANGE_PATH_VALUE;
 import static org.apache.iotdb.commons.pipe.config.constant.PipeSourceConstant.EXTRACTOR_HISTORY_LOOSE_RANGE_TIME_VALUE;
 import static org.apache.iotdb.commons.pipe.config.constant.PipeSourceConstant.EXTRACTOR_HISTORY_START_TIME_KEY;
-import static org.apache.iotdb.commons.pipe.config.constant.PipeSourceConstant.EXTRACTOR_HISTORY_TSFILE_ORDER_BY_FLUSH_TIME_DEFAULT_VALUE;
-import static org.apache.iotdb.commons.pipe.config.constant.PipeSourceConstant.EXTRACTOR_HISTORY_TSFILE_ORDER_BY_FLUSH_TIME_KEY;
+import static org.apache.iotdb.commons.pipe.config.constant.PipeSourceConstant.EXTRACTOR_HISTORY_TSFILE_ORDER_BY_QUERY_PRIORITY_DEFAULT_VALUE;
+import static org.apache.iotdb.commons.pipe.config.constant.PipeSourceConstant.EXTRACTOR_HISTORY_TSFILE_ORDER_BY_QUERY_PRIORITY_KEY;
 import static org.apache.iotdb.commons.pipe.config.constant.PipeSourceConstant.EXTRACTOR_MODE_STRICT_DEFAULT_VALUE;
 import static org.apache.iotdb.commons.pipe.config.constant.PipeSourceConstant.EXTRACTOR_MODE_STRICT_KEY;
 import static org.apache.iotdb.commons.pipe.config.constant.PipeSourceConstant.EXTRACTOR_MODS_DEFAULT_VALUE;
@@ -113,7 +114,7 @@ import static org.apache.iotdb.commons.pipe.config.constant.PipeSourceConstant.S
 import static org.apache.iotdb.commons.pipe.config.constant.PipeSourceConstant.SOURCE_HISTORY_END_TIME_KEY;
 import static org.apache.iotdb.commons.pipe.config.constant.PipeSourceConstant.SOURCE_HISTORY_LOOSE_RANGE_KEY;
 import static org.apache.iotdb.commons.pipe.config.constant.PipeSourceConstant.SOURCE_HISTORY_START_TIME_KEY;
-import static org.apache.iotdb.commons.pipe.config.constant.PipeSourceConstant.SOURCE_HISTORY_TSFILE_ORDER_BY_FLUSH_TIME_KEY;
+import static org.apache.iotdb.commons.pipe.config.constant.PipeSourceConstant.SOURCE_HISTORY_TSFILE_ORDER_BY_QUERY_PRIORITY_KEY;
 import static org.apache.iotdb.commons.pipe.config.constant.PipeSourceConstant.SOURCE_MODE_STRICT_KEY;
 import static org.apache.iotdb.commons.pipe.config.constant.PipeSourceConstant.SOURCE_MODS_ENABLE_KEY;
 import static org.apache.iotdb.commons.pipe.config.constant.PipeSourceConstant.SOURCE_MODS_KEY;
@@ -153,8 +154,8 @@ public class PipeHistoricalDataRegionTsFileAndDeletionSource
 
   private boolean sloppyTimeRange; // true to disable time range filter after extraction
   private boolean sloppyPattern; // true to disable pattern filter after extraction
-  private boolean shouldOrderHistoricalTsFileByFlushTime =
-      EXTRACTOR_HISTORY_TSFILE_ORDER_BY_FLUSH_TIME_DEFAULT_VALUE;
+  private boolean shouldOrderHistoricalTsFileByQueryPriority =
+      EXTRACTOR_HISTORY_TSFILE_ORDER_BY_QUERY_PRIORITY_DEFAULT_VALUE;
 
   private Pair<Boolean, Boolean> listeningOptionPair;
   private boolean shouldExtractInsertion;
@@ -193,12 +194,12 @@ public class PipeHistoricalDataRegionTsFileAndDeletionSource
       throw new PipeParameterNotValidException(e.getMessage());
     }
 
-    shouldOrderHistoricalTsFileByFlushTime =
+    shouldOrderHistoricalTsFileByQueryPriority =
         parameters.getBooleanOrDefault(
             Arrays.asList(
-                EXTRACTOR_HISTORY_TSFILE_ORDER_BY_FLUSH_TIME_KEY,
-                SOURCE_HISTORY_TSFILE_ORDER_BY_FLUSH_TIME_KEY),
-            EXTRACTOR_HISTORY_TSFILE_ORDER_BY_FLUSH_TIME_DEFAULT_VALUE);
+                EXTRACTOR_HISTORY_TSFILE_ORDER_BY_QUERY_PRIORITY_KEY,
+                SOURCE_HISTORY_TSFILE_ORDER_BY_QUERY_PRIORITY_KEY),
+            EXTRACTOR_HISTORY_TSFILE_ORDER_BY_QUERY_PRIORITY_DEFAULT_VALUE);
 
     if (parameters.hasAnyAttributes(EXTRACTOR_MODE_STRICT_KEY, SOURCE_MODE_STRICT_KEY)) {
       final boolean isStrictMode =
@@ -326,12 +327,12 @@ public class PipeHistoricalDataRegionTsFileAndDeletionSource
       throws IllegalPathException {
     shouldExtractInsertion = listeningOptionPair.getLeft();
     shouldExtractDeletion = listeningOptionPair.getRight();
-    shouldOrderHistoricalTsFileByFlushTime =
+    shouldOrderHistoricalTsFileByQueryPriority =
         parameters.getBooleanOrDefault(
             Arrays.asList(
-                EXTRACTOR_HISTORY_TSFILE_ORDER_BY_FLUSH_TIME_KEY,
-                SOURCE_HISTORY_TSFILE_ORDER_BY_FLUSH_TIME_KEY),
-            EXTRACTOR_HISTORY_TSFILE_ORDER_BY_FLUSH_TIME_DEFAULT_VALUE);
+                EXTRACTOR_HISTORY_TSFILE_ORDER_BY_QUERY_PRIORITY_KEY,
+                SOURCE_HISTORY_TSFILE_ORDER_BY_QUERY_PRIORITY_KEY),
+            EXTRACTOR_HISTORY_TSFILE_ORDER_BY_QUERY_PRIORITY_DEFAULT_VALUE);
 
     final PipeRuntimeEnvironment environment = configuration.getRuntimeEnvironment();
 
@@ -542,8 +543,8 @@ public class PipeHistoricalDataRegionTsFileAndDeletionSource
             .ifPresent(manager -> extractDeletions(manager, originalResourceList));
       }
 
-      if (shouldUseHistoricalTsFileFlushTimeOrder()) {
-        prepareResourcesForHistoricalTsFileFlushTimeOrder(originalResourceList);
+      if (shouldUseHistoricalTsFileQueryPriorityOrder()) {
+        prepareResourcesForHistoricalTsFileQueryPriorityOrder(originalResourceList);
       }
 
       // Sort tsFileResource and deletionResource
@@ -569,19 +570,19 @@ public class PipeHistoricalDataRegionTsFileAndDeletionSource
     }
   }
 
-  private boolean shouldUseHistoricalTsFileFlushTimeOrder() {
+  private boolean shouldUseHistoricalTsFileQueryPriorityOrder() {
     // Deletion resources only carry progressIndex. Keep the old progressIndex order when deletions
     // are extracted together with TsFiles so insertion/deletion ordering semantics are unchanged.
-    return shouldOrderHistoricalTsFileByFlushTime
+    return shouldOrderHistoricalTsFileByQueryPriority
         && shouldExtractInsertion
         && !shouldExtractDeletion;
   }
 
-  private void prepareResourcesForHistoricalTsFileFlushTimeOrder(
+  private void prepareResourcesForHistoricalTsFileQueryPriorityOrder(
       final List<PersistentResource> resourceList) {
-    // Flush-time order is intentionally not compatible with progressIndex order, so report progress
-    // only after all selected historical TsFiles are supplied. This prefers possible retransmission
-    // over losing overwrite semantics.
+    // Query-priority order is intentionally not compatible with progressIndex order, so report
+    // progress only after all selected historical TsFiles are supplied. This prefers possible
+    // retransmission over losing overwrite semantics.
     resourceList.removeIf(
         resource ->
             resource instanceof TsFileResource
@@ -601,14 +602,14 @@ public class PipeHistoricalDataRegionTsFileAndDeletionSource
   }
 
   private void sortExtractedResources(final List<PersistentResource> resourceList) {
-    if (shouldUseHistoricalTsFileFlushTimeOrder()) {
-      // Send TsFiles in source-side file creation order. For duplicated points, older files are
-      // loaded first on the receiver and newer files are loaded later to preserve overwrite
-      // semantics.
+    if (shouldUseHistoricalTsFileQueryPriorityOrder()) {
+      // Send TsFiles from lower query/compaction priority to higher priority. For duplicated
+      // points, covered files are loaded first on the receiver and covering files are loaded later
+      // to preserve overwrite semantics.
       resourceList.sort(
           (o1, o2) ->
               o1 instanceof TsFileResource && o2 instanceof TsFileResource
-                  ? compareTsFileResourcesByFlushTime((TsFileResource) o1, (TsFileResource) o2)
+                  ? compareTsFileResourcesByQueryPriority((TsFileResource) o1, (TsFileResource) o2)
                   : comparePersistentResourcesByProgressIndex(o1, o2));
       return;
     }
@@ -625,18 +626,17 @@ public class PipeHistoricalDataRegionTsFileAndDeletionSource
     return resource1.getProgressIndex().topologicalCompareTo(resource2.getProgressIndex());
   }
 
-  private int compareTsFileResourcesByFlushTime(
+  private int compareTsFileResourcesByQueryPriority(
       final TsFileResource resource1, final TsFileResource resource2) {
-    if (resource1.isSeq() != resource2.isSeq()) {
-      return resource1.isSeq() ? -1 : 1;
-    }
-
-    int result = Long.compare(resource1.getTsFileID().timestamp, resource2.getTsFileID().timestamp);
-    if (result != 0) {
-      return result;
-    }
-
-    result = Long.compare(resource1.getVersion(), resource2.getVersion());
+    int result =
+        new MergeReaderPriority(
+                resource1.getTsFileID().timestamp, resource1.getVersion(), 0, resource1.isSeq())
+            .compareTo(
+                new MergeReaderPriority(
+                    resource2.getTsFileID().timestamp,
+                    resource2.getVersion(),
+                    0,
+                    resource2.isSeq()));
     if (result != 0) {
       return result;
     }
@@ -660,7 +660,7 @@ public class PipeHistoricalDataRegionTsFileAndDeletionSource
     // serious waiting for locks. Therefore, the flush operation is always performed for the
     // consensus pipe, and the lastFlushed timestamp is not updated here.
     if (pipeName.startsWith(PipeStaticMeta.CONSENSUS_PIPE_PREFIX)
-        || shouldUseHistoricalTsFileFlushTimeOrder()) {
+        || shouldUseHistoricalTsFileQueryPriorityOrder()) {
       dataRegion.syncCloseAllWorkingTsFileProcessors();
     } else {
       dataRegion.asyncCloseAllWorkingTsFileProcessors();
@@ -1002,7 +1002,7 @@ public class PipeHistoricalDataRegionTsFileAndDeletionSource
         if (consumeSkippedHistoricalTsFileEventIfNecessary(tsFileResource)) {
           clearReplicateIndexForResource(tsFileResource);
           pendingQueue.poll();
-          if (shouldUseHistoricalTsFileFlushTimeOrder()) {
+          if (shouldUseHistoricalTsFileQueryPriorityOrder()) {
             continue;
           }
           return supplyProgressReportEvent(tsFileResource.getMaxProgressIndex());
@@ -1097,7 +1097,7 @@ public class PipeHistoricalDataRegionTsFileAndDeletionSource
   protected Event supplyTsFileEvent(final TsFileResource resource) {
     if (!filteredTsFileResources2TableNames.containsKey(resource)) {
       clearReplicateIndexForResource(resource);
-      return shouldUseHistoricalTsFileFlushTimeOrder()
+      return shouldUseHistoricalTsFileQueryPriorityOrder()
           ? null
           : supplyProgressReportEvent(resource.getMaxProgressIndex());
     }
@@ -1127,7 +1127,7 @@ public class PipeHistoricalDataRegionTsFileAndDeletionSource
               historicalDataExtractionStartTime,
               historicalDataExtractionEndTime);
 
-      if (shouldUseHistoricalTsFileFlushTimeOrder()) {
+      if (shouldUseHistoricalTsFileQueryPriorityOrder()) {
         event.skipReportOnCommitAndGeneratedEvents();
       }
 
