@@ -222,11 +222,6 @@ public class PipeReceiverRuntimeRegistry {
         pipeIds.remove(formatPipeId(pipeName, pipeCreationTime));
       }
     }
-
-    @Override
-    public int hashCode() {
-      return Objects.hash(connectionKey);
-    }
   }
 
   private static class GroupKey implements Comparable<GroupKey> {
