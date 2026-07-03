@@ -347,22 +347,11 @@ public class IoTDBInternalLocalReporter extends IoTDBInternalReporter {
 
   static boolean shouldLogFailure(
       FailureLogState failureLogState, String failureSignature, long currentTime) {
-    synchronized (failureLogState) {
-      if (!failureSignature.equals(failureLogState.lastFailureSignature)
-          || currentTime >= failureLogState.nextLogTime) {
-        failureLogState.lastFailureSignature = failureSignature;
-        failureLogState.nextLogTime = currentTime + FAILURE_LOG_INTERVAL;
-        return true;
-      }
-      return false;
-    }
+    return failureLogState.shouldLog(failureSignature, currentTime);
   }
 
   static void clearFailureLogState(FailureLogState failureLogState) {
-    synchronized (failureLogState) {
-      failureLogState.lastFailureSignature = "";
-      failureLogState.nextLogTime = 0L;
-    }
+    failureLogState.clear();
   }
 
   static void clearFailureLogState(
@@ -373,5 +362,19 @@ public class IoTDBInternalLocalReporter extends IoTDBInternalReporter {
   static class FailureLogState {
     private String lastFailureSignature = "";
     private long nextLogTime = 0L;
+
+    private synchronized boolean shouldLog(String failureSignature, long currentTime) {
+      if (!failureSignature.equals(lastFailureSignature) || currentTime >= nextLogTime) {
+        lastFailureSignature = failureSignature;
+        nextLogTime = currentTime + FAILURE_LOG_INTERVAL;
+        return true;
+      }
+      return false;
+    }
+
+    private synchronized void clear() {
+      lastFailureSignature = "";
+      nextLogTime = 0L;
+    }
   }
 }

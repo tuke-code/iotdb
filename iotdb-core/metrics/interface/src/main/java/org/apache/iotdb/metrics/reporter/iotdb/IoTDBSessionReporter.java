@@ -219,27 +219,29 @@ public class IoTDBSessionReporter extends IoTDBReporter {
   }
 
   static boolean shouldLogFailure(FailureLogState failureLogState, String failureMessage) {
-    synchronized (failureLogState) {
-      long currentTime = System.currentTimeMillis();
-      if (!failureMessage.equals(failureLogState.lastFailure)
-          || currentTime >= failureLogState.nextLogTime) {
-        failureLogState.lastFailure = failureMessage;
-        failureLogState.nextLogTime = currentTime + FAILURE_LOG_INTERVAL;
-        return true;
-      }
-      return false;
-    }
+    return failureLogState.shouldLog(failureMessage, System.currentTimeMillis());
   }
 
   static void clearFailureLogState(FailureLogState failureLogState) {
-    synchronized (failureLogState) {
-      failureLogState.lastFailure = "";
-      failureLogState.nextLogTime = 0L;
-    }
+    failureLogState.clear();
   }
 
   static class FailureLogState {
     private long nextLogTime = 0L;
     private String lastFailure = "";
+
+    private synchronized boolean shouldLog(String failureMessage, long currentTime) {
+      if (!failureMessage.equals(lastFailure) || currentTime >= nextLogTime) {
+        lastFailure = failureMessage;
+        nextLogTime = currentTime + FAILURE_LOG_INTERVAL;
+        return true;
+      }
+      return false;
+    }
+
+    private synchronized void clear() {
+      lastFailure = "";
+      nextLogTime = 0L;
+    }
   }
 }

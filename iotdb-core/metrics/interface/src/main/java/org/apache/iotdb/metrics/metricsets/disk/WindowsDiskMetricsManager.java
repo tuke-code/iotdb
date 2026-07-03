@@ -607,24 +607,12 @@ public class WindowsDiskMetricsManager implements IDiskMetricsManager {
     return false;
   }
 
-  private static boolean shouldLogFailure(FailureLogState failureLogState, String failureMessage) {
-    synchronized (failureLogState) {
-      long currentTime = System.currentTimeMillis();
-      if (!failureMessage.equals(failureLogState.lastFailure)
-          || currentTime >= failureLogState.nextLogTime) {
-        failureLogState.lastFailure = failureMessage;
-        failureLogState.nextLogTime = currentTime + FAILURE_LOG_INTERVAL;
-        return true;
-      }
-      return false;
-    }
+  static boolean shouldLogFailure(FailureLogState failureLogState, String failureMessage) {
+    return failureLogState.shouldLog(failureMessage, System.currentTimeMillis());
   }
 
-  private static void clearFailureLogState(FailureLogState failureLogState) {
-    synchronized (failureLogState) {
-      failureLogState.lastFailure = "";
-      failureLogState.nextLogTime = 0L;
-    }
+  static void clearFailureLogState(FailureLogState failureLogState) {
+    failureLogState.clear();
   }
 
   private void clearPowerShellFailure() {
@@ -653,9 +641,23 @@ public class WindowsDiskMetricsManager implements IDiskMetricsManager {
     return Charset.defaultCharset();
   }
 
-  private static class FailureLogState {
+  static class FailureLogState {
     private long nextLogTime = 0L;
     private String lastFailure = "";
+
+    private synchronized boolean shouldLog(String failureMessage, long currentTime) {
+      if (!failureMessage.equals(lastFailure) || currentTime >= nextLogTime) {
+        lastFailure = failureMessage;
+        nextLogTime = currentTime + FAILURE_LOG_INTERVAL;
+        return true;
+      }
+      return false;
+    }
+
+    private synchronized void clear() {
+      lastFailure = "";
+      nextLogTime = 0L;
+    }
   }
 
   private static String resolvePowerShellExecutable() {
