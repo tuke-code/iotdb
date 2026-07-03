@@ -99,6 +99,8 @@ import org.apache.iotdb.commons.subscription.meta.consumer.ConsumerGroupMeta;
 import org.apache.iotdb.commons.subscription.meta.topic.TopicMeta;
 import org.apache.iotdb.commons.trigger.TriggerInformation;
 import org.apache.iotdb.commons.udf.UDFInformation;
+import org.apache.iotdb.commons.utils.KillPoint.DataNodeKillPoints;
+import org.apache.iotdb.commons.utils.KillPoint.KillPoint;
 import org.apache.iotdb.commons.utils.PathUtils;
 import org.apache.iotdb.commons.utils.SerializeUtils;
 import org.apache.iotdb.commons.utils.StatusUtils;
@@ -278,6 +280,7 @@ import org.apache.iotdb.mpp.rpc.thrift.TFragmentInstanceInfoResp;
 import org.apache.iotdb.mpp.rpc.thrift.TGenerateDataPartitionTableHeartbeatResp;
 import org.apache.iotdb.mpp.rpc.thrift.TGenerateDataPartitionTableReq;
 import org.apache.iotdb.mpp.rpc.thrift.TGenerateDataPartitionTableResp;
+import org.apache.iotdb.mpp.rpc.thrift.TGetDataPartitionTableGeneratorProgressResp;
 import org.apache.iotdb.mpp.rpc.thrift.TGetEarliestTimeslotsResp;
 import org.apache.iotdb.mpp.rpc.thrift.TInactiveTriggerInstanceReq;
 import org.apache.iotdb.mpp.rpc.thrift.TInvalidateCacheReq;
@@ -308,6 +311,7 @@ import org.apache.iotdb.mpp.rpc.thrift.TPushSubscriptionRuntimeReq;
 import org.apache.iotdb.mpp.rpc.thrift.TPushTopicMetaReq;
 import org.apache.iotdb.mpp.rpc.thrift.TPushTopicMetaResp;
 import org.apache.iotdb.mpp.rpc.thrift.TPushTopicMetaRespExceptionMessage;
+import org.apache.iotdb.mpp.rpc.thrift.TPushTopicOwnerLeaseReq;
 import org.apache.iotdb.mpp.rpc.thrift.TRegionLeaderChangeReq;
 import org.apache.iotdb.mpp.rpc.thrift.TRegionLeaderChangeResp;
 import org.apache.iotdb.mpp.rpc.thrift.TRegionMigrateResult;
@@ -432,6 +436,7 @@ public class DataNodeInternalRPCServiceImpl implements IDataNodeRPCService.Iface
 
   private static final long TEST_CONNECTION_TIMEOUT_MS =
       CommonDescriptor.getInstance().getConfig().getDnConnectionTimeoutInMS();
+  private static final int TEST_CONNECTION_RETRY_NUM = 1;
 
   private static final ExecutorService TOPOLOGY_PROBING_EXECUTOR =
       IoTDBThreadPoolFactory.newFixedThreadPool(
@@ -1387,49 +1392,20 @@ public class DataNodeInternalRPCServiceImpl implements IDataNodeRPCService.Iface
 
   @Override
   public TPushPipeMetaResp pushMultiPipeMeta(TPushMultiPipeMetaReq req) {
-    boolean hasException = false;
-    // If there is any exception, we use the size of exceptionMessages to record the fail index
-    List<TPushPipeMetaRespExceptionMessage> exceptionMessages = new ArrayList<>();
-    try {
-      if (req.isSetPipeNamesToDrop()) {
-        for (String pipeNameToDrop : req.getPipeNamesToDrop()) {
-          TPushPipeMetaRespExceptionMessage message =
-              PipeDataNodeAgent.task().handleDropPipe(pipeNameToDrop);
-          exceptionMessages.add(message);
-          if (message != null) {
-            // If there is any exception, skip the remaining pipes
-            hasException = true;
-            break;
+    return PushMultiPipeMetaHelper.pushMultiPipeMeta(
+        req,
+        new PushMultiPipeMetaHelper.Handler() {
+          @Override
+          public TPushPipeMetaRespExceptionMessage handleDropPipe(final String pipeName) {
+            return PipeDataNodeAgent.task().handleDropPipe(pipeName);
           }
-        }
-      } else if (req.isSetPipeMetas()) {
-        for (ByteBuffer byteBuffer : req.getPipeMetas()) {
-          final PipeMeta pipeMeta = PipeMeta.deserialize4TaskAgent(byteBuffer);
-          TPushPipeMetaRespExceptionMessage message =
-              PipeDataNodeAgent.task().handleSinglePipeMetaChanges(pipeMeta);
-          exceptionMessages.add(message);
-          if (message != null) {
-            // If there is any exception, skip the remaining pipes
-            hasException = true;
-            break;
-          }
-        }
-      } else {
-        throw new Exception(DataNodeMiscMessages.INVALID_PUSH_MULTI_PIPE_META_REQ);
-      }
 
-      return hasException
-          ? new TPushPipeMetaResp()
-              .setStatus(new TSStatus(TSStatusCode.PIPE_PUSH_META_ERROR.getStatusCode()))
-              .setExceptionMessages(exceptionMessages)
-          : new TPushPipeMetaResp()
-              .setStatus(new TSStatus(TSStatusCode.SUCCESS_STATUS.getStatusCode()));
-    } catch (Exception e) {
-      LOGGER.warn(DataNodeMiscMessages.ERROR_PUSHING_MULTI_PIPE_META, e);
-      return new TPushPipeMetaResp()
-          .setStatus(new TSStatus(TSStatusCode.PIPE_PUSH_META_ERROR.getStatusCode()))
-          .setExceptionMessages(exceptionMessages);
-    }
+          @Override
+          public TPushPipeMetaRespExceptionMessage handleSinglePipeMeta(final ByteBuffer pipeMeta) {
+            return PipeDataNodeAgent.task()
+                .handleSinglePipeMetaChanges(PipeMeta.deserialize4TaskAgent(pipeMeta));
+          }
+        });
   }
 
   @Override
@@ -1543,6 +1519,20 @@ public class DataNodeInternalRPCServiceImpl implements IDataNodeRPCService.Iface
       return new TPushTopicMetaResp()
           .setStatus(new TSStatus(TSStatusCode.TOPIC_PUSH_META_ERROR.getStatusCode()))
           .setExceptionMessages(exceptionMessages);
+    }
+  }
+
+  @Override
+  public TSStatus pushTopicOwnerLease(TPushTopicOwnerLeaseReq req) {
+    if (!SubscriptionConfig.getInstance().getSubscriptionEnabled()) {
+      return new TSStatus(TSStatusCode.SUCCESS_STATUS.getStatusCode());
+    }
+    try {
+      SubscriptionAgent.topic().handleTopicOwnerLeases(req.getOwnerLeases());
+      return new TSStatus(TSStatusCode.SUCCESS_STATUS.getStatusCode());
+    } catch (Exception e) {
+      LOGGER.warn(DataNodeMiscMessages.ERROR_PUSHING_TOPIC_OWNER_LEASE, e);
+      return new TSStatus(TSStatusCode.TOPIC_PUSH_META_ERROR.getStatusCode());
     }
   }
 
@@ -2205,7 +2195,8 @@ public class DataNodeInternalRPCServiceImpl implements IDataNodeRPCService.Iface
         DnToCnRequestType.TEST_CONNECTION,
         (AsyncRequestContext<Object, TSStatus, DnToCnRequestType, TConfigNodeLocation> handler) ->
             DnToCnInternalServiceAsyncRequestManager.getInstance()
-                .sendAsyncRequestWithTimeoutInMs(handler, TEST_CONNECTION_TIMEOUT_MS));
+                .sendAsyncRequest(
+                    handler, TEST_CONNECTION_RETRY_NUM, TEST_CONNECTION_TIMEOUT_MS, true));
   }
 
   private List<TTestConnectionResult> testAllDataNodeConnectionInHeartbeatChannel(
@@ -2231,7 +2222,8 @@ public class DataNodeInternalRPCServiceImpl implements IDataNodeRPCService.Iface
         DnToDnRequestType.TEST_CONNECTION,
         (AsyncRequestContext<Object, TSStatus, DnToDnRequestType, TDataNodeLocation> handler) ->
             DnToDnInternalServiceAsyncRequestManager.getInstance()
-                .sendAsyncRequestWithTimeoutInMs(handler, TEST_CONNECTION_TIMEOUT_MS));
+                .sendAsyncRequest(
+                    handler, TEST_CONNECTION_RETRY_NUM, TEST_CONNECTION_TIMEOUT_MS, true));
   }
 
   private List<TTestConnectionResult> testAllDataNodeMPPServiceConnection(
@@ -2244,7 +2236,8 @@ public class DataNodeInternalRPCServiceImpl implements IDataNodeRPCService.Iface
         DnToDnRequestType.TEST_CONNECTION,
         (AsyncRequestContext<Object, TSStatus, DnToDnRequestType, TDataNodeLocation> handler) ->
             DataNodeMPPServiceAsyncRequestManager.getInstance()
-                .sendAsyncRequestWithTimeoutInMs(handler, TEST_CONNECTION_TIMEOUT_MS));
+                .sendAsyncRequest(
+                    handler, TEST_CONNECTION_RETRY_NUM, TEST_CONNECTION_TIMEOUT_MS, true));
   }
 
   private List<TTestConnectionResult> testAllDataNodeExternalServiceConnection(
@@ -2257,7 +2250,8 @@ public class DataNodeInternalRPCServiceImpl implements IDataNodeRPCService.Iface
         DnToDnRequestType.TEST_CONNECTION,
         (AsyncRequestContext<Object, TSStatus, DnToDnRequestType, TDataNodeLocation> handler) ->
             DataNodeExternalServiceAsyncRequestManager.getInstance()
-                .sendAsyncRequestWithTimeoutInMs(handler, TEST_CONNECTION_TIMEOUT_MS));
+                .sendAsyncRequest(
+                    handler, TEST_CONNECTION_RETRY_NUM, TEST_CONNECTION_TIMEOUT_MS, true));
   }
 
   @Override
@@ -3233,8 +3227,19 @@ public class DataNodeInternalRPCServiceImpl implements IDataNodeRPCService.Iface
         REGION_MIGRATE_PROCESS,
         peers,
         regionId);
+    if (isRatisConsensusRegion(regionId)) {
+      KillPoint.setKillPoint(DataNodeKillPoints.DESTINATION_CREATE_LOCAL_PEER);
+    }
     status.setMessage(DataNodeMiscMessages.CREATE_NEW_REGION_PEER_SUCCEED_REGION_ID + regionId);
     return status;
+  }
+
+  private boolean isRatisConsensusRegion(ConsensusGroupId regionId) {
+    return regionId instanceof DataRegionId
+        ? ConsensusFactory.RATIS_CONSENSUS.equals(
+            IoTDBDescriptor.getInstance().getConfig().getDataRegionConsensusProtocolClass())
+        : ConsensusFactory.RATIS_CONSENSUS.equals(
+            IoTDBDescriptor.getInstance().getConfig().getSchemaRegionConsensusProtocolClass());
   }
 
   @Override
@@ -3375,13 +3380,14 @@ public class DataNodeInternalRPCServiceImpl implements IDataNodeRPCService.Iface
 
     try {
       // Check if there's already a task in the progress
-      if (currentGenerator != null
-          && currentGenerator.getStatus() == DataPartitionTableGenerator.TaskStatus.IN_PROGRESS) {
+      final DataPartitionTableGenerator runningGenerator = currentGenerator;
+      if (runningGenerator != null
+          && runningGenerator.getStatus() == DataPartitionTableGenerator.TaskStatus.IN_PROGRESS) {
         resp.setErrorCode(DataPartitionTableGeneratorState.IN_PROGRESS.getCode());
         resp.setMessage(
             String.format(
                 "DataPartitionTable generation is already in the progress: %.1f%%",
-                currentGenerator.getProgress() * 100));
+                runningGenerator.getProgress() * 100));
         resp.setStatus(RpcUtils.getStatus(TSStatusCode.INTERNAL_SERVER_ERROR));
         return resp;
       }
@@ -3403,17 +3409,18 @@ public class DataNodeInternalRPCServiceImpl implements IDataNodeRPCService.Iface
               ThreadName.DATA_PARTITION_RECOVER_PARALLEL_POOL.getName(),
               new ThreadPoolExecutor.CallerRunsPolicy());
 
-      currentGenerator =
+      final DataPartitionTableGenerator generator =
           new DataPartitionTableGenerator(
               partitionTableRecoverExecutor,
               req.getDatabases(),
               seriesSlotNum,
               seriesPartitionExecutorClass);
+      currentGenerator = generator;
       currentTaskId = System.currentTimeMillis();
 
       // Start generation synchronously for now to return the data partition table immediately
-      currentGeneratorFuture = currentGenerator.startGeneration();
-      parseGenerationStatus(resp);
+      currentGeneratorFuture = generator.startGeneration();
+      parseGenerationStatus(resp, generator);
     } catch (Exception e) {
       LOGGER.error(DataNodeMiscMessages.FAILED_GENERATE_DATA_PARTITION_TABLE, e);
       resp.setStatus(
@@ -3437,9 +3444,13 @@ public class DataNodeInternalRPCServiceImpl implements IDataNodeRPCService.Iface
     try {
       // To resolve this situation that the DataNode is registered and didn't request
       // generateDataPartitionTable interface yet.
-      if (currentGeneratorFuture == null || currentGenerator == null) {
+      CompletableFuture<Void> generatorFuture = currentGeneratorFuture;
+      DataPartitionTableGenerator generator = currentGenerator;
+      if (generatorFuture == null || generator == null) {
         generateDataPartitionTable(req);
-        if (currentGeneratorFuture == null || currentGenerator == null) {
+        generatorFuture = currentGeneratorFuture;
+        generator = currentGenerator;
+        if (generatorFuture == null || generator == null) {
           resp.setErrorCode(DataPartitionTableGeneratorState.UNKNOWN.getCode());
           resp.setMessage(DataNodeMiscMessages.NO_DATA_PARTITION_TABLE_GENERATION_TASK_FOUND);
           resp.setStatus(RpcUtils.getStatus(TSStatusCode.INTERNAL_SERVER_ERROR));
@@ -3447,15 +3458,20 @@ public class DataNodeInternalRPCServiceImpl implements IDataNodeRPCService.Iface
         }
       }
 
-      currentGeneratorFuture.get(timeoutMs, TimeUnit.MILLISECONDS);
+      try {
+        generatorFuture.get(timeoutMs, TimeUnit.MILLISECONDS);
+      } catch (TimeoutException e) {
+        parseGenerationStatus(resp, generator);
+        return resp;
+      }
 
-      parseGenerationStatus(resp);
-      if (currentGenerator.getStatus().equals(DataPartitionTableGenerator.TaskStatus.COMPLETED)) {
+      parseGenerationStatus(resp, generator);
+      if (generator.getStatus().equals(DataPartitionTableGenerator.TaskStatus.COMPLETED)) {
         boolean success = false;
         List<DatabaseScopedDataPartitionTable> databaseScopedDataPartitionTableList =
             new ArrayList<>();
         Map<String, DataPartitionTable> dataPartitionTableMap =
-            currentGenerator.getDatabasePartitionTableMap();
+            generator.getDatabasePartitionTableMap();
         if (!dataPartitionTableMap.isEmpty()) {
           for (Map.Entry<String, DataPartitionTable> entry : dataPartitionTableMap.entrySet()) {
             String database = entry.getKey();
@@ -3489,30 +3505,73 @@ public class DataNodeInternalRPCServiceImpl implements IDataNodeRPCService.Iface
     return resp;
   }
 
-  private void parseGenerationStatus(Object resp) {
-    if (currentGenerator == null) {
-      return;
+  @Override
+  public TGetDataPartitionTableGeneratorProgressResp getDataPartitionTableGeneratorProgress() {
+    TGetDataPartitionTableGeneratorProgressResp resp =
+        new TGetDataPartitionTableGeneratorProgressResp();
+    final DataPartitionTableGenerator generator = currentGenerator;
+
+    if (generator == null) {
+      resp.setErrorCode(DataPartitionTableGeneratorState.UNKNOWN.getCode());
+      resp.setProgress(0.0);
+      resp.setMessage("No DataPartitionTable generation task found");
+      resp.setStatus(RpcUtils.getStatus(TSStatusCode.SUCCESS_STATUS));
+      return resp;
     }
 
-    switch (currentGenerator.getStatus()) {
+    switch (generator.getStatus()) {
+      case IN_PROGRESS:
+        resp.setErrorCode(DataPartitionTableGeneratorState.IN_PROGRESS.getCode());
+        resp.setProgress(generator.getProgress());
+        resp.setMessage(
+            String.format(
+                "DataPartitionTable generation in progress: %.1f%%",
+                generator.getProgress() * 100));
+        resp.setStatus(RpcUtils.getStatus(TSStatusCode.SUCCESS_STATUS));
+        break;
+      case COMPLETED:
+        resp.setErrorCode(DataPartitionTableGeneratorState.SUCCESS.getCode());
+        resp.setProgress(1.0);
+        resp.setMessage("DataPartitionTable generation completed successfully");
+        resp.setStatus(RpcUtils.getStatus(TSStatusCode.SUCCESS_STATUS));
+        break;
+      case FAILED:
+        resp.setErrorCode(DataPartitionTableGeneratorState.FAILED.getCode());
+        resp.setProgress(generator.getProgress());
+        resp.setMessage("DataPartitionTable generation failed: " + generator.getErrorMessage());
+        resp.setStatus(RpcUtils.getStatus(TSStatusCode.INTERNAL_SERVER_ERROR));
+        break;
+      default:
+        resp.setErrorCode(DataPartitionTableGeneratorState.UNKNOWN.getCode());
+        resp.setProgress(generator.getProgress());
+        resp.setMessage("Unknown task status: " + generator.getStatus());
+        resp.setStatus(RpcUtils.getStatus(TSStatusCode.INTERNAL_SERVER_ERROR));
+        break;
+    }
+    return resp;
+  }
+
+  private void parseGenerationStatus(Object resp, DataPartitionTableGenerator generator) {
+    switch (generator.getStatus()) {
       case IN_PROGRESS:
         setResponseFields(
             resp,
             DataPartitionTableGeneratorState.IN_PROGRESS.getCode(),
             String.format(
-                "DataPartitionTable generation in progress: %.1f%%",
-                currentGenerator.getProgress() * 100),
+                "DataPartitionTable generation in progress: %.1f%%", generator.getProgress() * 100),
+            generator.getProgress(),
             RpcUtils.getStatus(TSStatusCode.SUCCESS_STATUS));
         LOGGER.info(
             String.format(
                 "DataPartitionTable generation with task ID: %s in progress: %.1f%%",
-                currentTaskId, currentGenerator.getProgress() * 100));
+                currentTaskId, generator.getProgress() * 100));
         break;
       case COMPLETED:
         setResponseFields(
             resp,
             DataPartitionTableGeneratorState.SUCCESS.getCode(),
             "DataPartitionTable generation completed successfully",
+            1.0,
             RpcUtils.getStatus(TSStatusCode.SUCCESS_STATUS));
         LOGGER.info(DataNodeMiscMessages.DATA_PARTITION_TABLE_COMPLETED, currentTaskId);
         break;
@@ -3520,7 +3579,8 @@ public class DataNodeInternalRPCServiceImpl implements IDataNodeRPCService.Iface
         setResponseFields(
             resp,
             DataPartitionTableGeneratorState.FAILED.getCode(),
-            "DataPartitionTable generation failed: " + currentGenerator.getErrorMessage(),
+            "DataPartitionTable generation failed: " + generator.getErrorMessage(),
+            generator.getProgress(),
             RpcUtils.getStatus(TSStatusCode.INTERNAL_SERVER_ERROR));
         LOGGER.info(DataNodeMiscMessages.DATA_PARTITION_TABLE_FAILED, currentTaskId);
         break;
@@ -3528,14 +3588,16 @@ public class DataNodeInternalRPCServiceImpl implements IDataNodeRPCService.Iface
         setResponseFields(
             resp,
             DataPartitionTableGeneratorState.UNKNOWN.getCode(),
-            "Unknown task status: " + currentGenerator.getStatus(),
+            "Unknown task status: " + generator.getStatus(),
+            generator.getProgress(),
             RpcUtils.getStatus(TSStatusCode.INTERNAL_SERVER_ERROR));
         LOGGER.info(DataNodeMiscMessages.DATA_PARTITION_TABLE_FAILED, currentTaskId);
         break;
     }
   }
 
-  private void setResponseFields(Object resp, int errorCode, String message, TSStatus status) {
+  private void setResponseFields(
+      Object resp, int errorCode, String message, double progress, TSStatus status) {
     if (resp instanceof TGenerateDataPartitionTableResp) {
       ((TGenerateDataPartitionTableResp) resp).setErrorCode(errorCode);
       ((TGenerateDataPartitionTableResp) resp).setMessage(message);
@@ -3543,6 +3605,7 @@ public class DataNodeInternalRPCServiceImpl implements IDataNodeRPCService.Iface
     } else if (resp instanceof TGenerateDataPartitionTableHeartbeatResp) {
       ((TGenerateDataPartitionTableHeartbeatResp) resp).setErrorCode(errorCode);
       ((TGenerateDataPartitionTableHeartbeatResp) resp).setMessage(message);
+      ((TGenerateDataPartitionTableHeartbeatResp) resp).setProgress(progress);
       ((TGenerateDataPartitionTableHeartbeatResp) resp).setStatus(status);
     }
   }
