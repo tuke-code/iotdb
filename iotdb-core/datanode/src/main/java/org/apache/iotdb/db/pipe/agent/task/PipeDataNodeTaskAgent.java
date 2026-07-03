@@ -99,6 +99,7 @@ import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Future;
 import java.util.concurrent.ThreadPoolExecutor;
 import java.util.concurrent.TimeUnit;
+import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.function.Consumer;
 import java.util.stream.Collectors;
 import java.util.stream.StreamSupport;
@@ -112,7 +113,11 @@ import static org.apache.iotdb.commons.pipe.config.constant.PipeSourceConstant.E
 import static org.apache.iotdb.commons.pipe.config.constant.PipeSourceConstant.EXTRACTOR_MODE_KEY;
 import static org.apache.iotdb.commons.pipe.config.constant.PipeSourceConstant.EXTRACTOR_MODE_QUERY_VALUE;
 import static org.apache.iotdb.commons.pipe.config.constant.PipeSourceConstant.EXTRACTOR_MODE_SNAPSHOT_VALUE;
+import static org.apache.iotdb.commons.pipe.config.constant.PipeSourceConstant.EXTRACTOR_PATH_EXCLUSION_KEY;
+import static org.apache.iotdb.commons.pipe.config.constant.PipeSourceConstant.EXTRACTOR_PATH_INCLUSION_KEY;
 import static org.apache.iotdb.commons.pipe.config.constant.PipeSourceConstant.EXTRACTOR_PATH_KEY;
+import static org.apache.iotdb.commons.pipe.config.constant.PipeSourceConstant.EXTRACTOR_PATTERN_EXCLUSION_KEY;
+import static org.apache.iotdb.commons.pipe.config.constant.PipeSourceConstant.EXTRACTOR_PATTERN_INCLUSION_KEY;
 import static org.apache.iotdb.commons.pipe.config.constant.PipeSourceConstant.EXTRACTOR_PATTERN_KEY;
 import static org.apache.iotdb.commons.pipe.config.constant.PipeSourceConstant.EXTRACTOR_REALTIME_ENABLE_DEFAULT_VALUE;
 import static org.apache.iotdb.commons.pipe.config.constant.PipeSourceConstant.EXTRACTOR_REALTIME_ENABLE_KEY;
@@ -122,7 +127,11 @@ import static org.apache.iotdb.commons.pipe.config.constant.PipeSourceConstant.S
 import static org.apache.iotdb.commons.pipe.config.constant.PipeSourceConstant.SOURCE_HISTORY_END_TIME_KEY;
 import static org.apache.iotdb.commons.pipe.config.constant.PipeSourceConstant.SOURCE_HISTORY_START_TIME_KEY;
 import static org.apache.iotdb.commons.pipe.config.constant.PipeSourceConstant.SOURCE_MODE_KEY;
+import static org.apache.iotdb.commons.pipe.config.constant.PipeSourceConstant.SOURCE_PATH_EXCLUSION_KEY;
+import static org.apache.iotdb.commons.pipe.config.constant.PipeSourceConstant.SOURCE_PATH_INCLUSION_KEY;
 import static org.apache.iotdb.commons.pipe.config.constant.PipeSourceConstant.SOURCE_PATH_KEY;
+import static org.apache.iotdb.commons.pipe.config.constant.PipeSourceConstant.SOURCE_PATTERN_EXCLUSION_KEY;
+import static org.apache.iotdb.commons.pipe.config.constant.PipeSourceConstant.SOURCE_PATTERN_INCLUSION_KEY;
 import static org.apache.iotdb.commons.pipe.config.constant.PipeSourceConstant.SOURCE_PATTERN_KEY;
 import static org.apache.iotdb.commons.pipe.config.constant.PipeSourceConstant.SOURCE_REALTIME_ENABLE_KEY;
 import static org.apache.iotdb.commons.pipe.config.constant.PipeSourceConstant.SOURCE_START_TIME_KEY;
@@ -626,25 +635,125 @@ public class PipeDataNodeTaskAgent extends PipeTaskAgent {
 
   ///////////////////////// Shutdown Logic /////////////////////////
 
+  public long getShutdownProgressPersistTimeoutInMs() {
+    return Math.max(
+        1_000L,
+        (long) CommonDescriptor.getInstance().getConfig().getCnConnectionTimeoutInMS()
+            + CommonDescriptor.getInstance().getConfig().getDnConnectionTimeoutInMS());
+  }
+
+  public boolean persistAllProgressIndex(final long timeoutInMs) {
+    final long normalizedTimeoutInMs = Math.max(1L, timeoutInMs);
+    final long startTime = System.currentTimeMillis();
+    final AtomicBoolean isConfirmed = new AtomicBoolean(false);
+    final Thread persistThread =
+        new Thread(
+            () -> isConfirmed.set(persistAllProgressIndexInternal()),
+            ThreadName.PIPE_RUNTIME_META_SYNCER.getName() + "-Shutdown-Persist");
+    persistThread.setDaemon(true);
+
+    LOGGER.info(
+        "Start to persist all pipe progress indexes during shutdown, pipe count {}, timeout {} ms.",
+        getPipeCount(),
+        normalizedTimeoutInMs);
+    persistThread.start();
+    try {
+      final long deadlineInMs = startTime + normalizedTimeoutInMs;
+      while (persistThread.isAlive()) {
+        final long remainingTimeInMs = deadlineInMs - System.currentTimeMillis();
+        if (remainingTimeInMs <= 0) {
+          break;
+        }
+        persistThread.join(remainingTimeInMs);
+      }
+    } catch (final InterruptedException e) {
+      Thread.currentThread().interrupt();
+      LOGGER.info("Interrupted while persisting all pipe progress indexes during shutdown.");
+      return false;
+    }
+
+    if (persistThread.isAlive()) {
+      LOGGER.warn(
+          "Timed out while persisting all pipe progress indexes during shutdown, cost {} ms.",
+          System.currentTimeMillis() - startTime);
+      return false;
+    }
+
+    if (!isConfirmed.get()) {
+      LOGGER.warn(
+          "Failed to persist all pipe progress indexes during shutdown, cost {} ms.",
+          System.currentTimeMillis() - startTime);
+    }
+    return isConfirmed.get();
+  }
+
   public void persistAllProgressIndex() {
-    try (final ConfigNodeClient configNodeClient =
-        ConfigNodeClientManager.getInstance().borrowClient(ConfigNodeInfo.CONFIG_REGION_ID)) {
-      // Send request to some API server
+    persistAllProgressIndex(getShutdownProgressPersistTimeoutInMs());
+  }
+
+  private boolean persistAllProgressIndexInternal() {
+    final long collectStartTime = System.currentTimeMillis();
+    final int pipeCount = getPipeCount();
+    try {
       final TPipeHeartbeatResp resp = new TPipeHeartbeatResp(new ArrayList<>());
       collectPipeMetaList(new TPipeHeartbeatReq(Long.MIN_VALUE), resp);
+      final int pipeMetaCount = resp.getPipeMetaList().size();
+      final int pipeMetaSizeInBytes =
+          resp.getPipeMetaList().stream()
+              .filter(Objects::nonNull)
+              .mapToInt(ByteBuffer::remaining)
+              .sum();
+      LOGGER.info(
+          "Collected pipe metas for shutdown progress persist, pipe count {}, pipe meta count {}, pipe meta size {} bytes, cost {} ms.",
+          pipeCount,
+          pipeMetaCount,
+          pipeMetaSizeInBytes,
+          System.currentTimeMillis() - collectStartTime);
+
       if (resp.getPipeMetaList().isEmpty()) {
-        return;
+        if (pipeCount != 0) {
+          LOGGER.info(
+              "Collected empty pipe metas during shutdown while pipe count is {}.", pipeCount);
+          return false;
+        }
+        return true;
       }
-      final TSStatus result =
-          configNodeClient.pushHeartbeat(
-              IoTDBDescriptor.getInstance().getConfig().getDataNodeId(), resp);
-      if (TSStatusCode.SUCCESS_STATUS.getStatusCode() != result.getCode()) {
-        LOGGER.warn("Failed to persist progress index to configNode, status: {}", result);
-      } else {
-        LOGGER.info("Successfully persisted all pipe's info to configNode.");
+
+      try (final ConfigNodeClient configNodeClient =
+          ConfigNodeClientManager.getInstance().borrowClient(ConfigNodeInfo.CONFIG_REGION_ID)) {
+        LOGGER.info(
+            "Start to push heartbeat shutdown pipe meta to ConfigNode, data node id {}, pipe count {}, pipe meta count {}, pipe meta size {} bytes.",
+            IoTDBDescriptor.getInstance().getConfig().getDataNodeId(),
+            pipeCount,
+            pipeMetaCount,
+            pipeMetaSizeInBytes);
+        final long pushStartTime = System.currentTimeMillis();
+        final TSStatus result =
+            configNodeClient.pushHeartbeat(
+                IoTDBDescriptor.getInstance().getConfig().getDataNodeId(), resp);
+        final long pushCostTime = System.currentTimeMillis() - pushStartTime;
+        if (TSStatusCode.SUCCESS_STATUS.getStatusCode() != result.getCode()) {
+          LOGGER.warn("Failed to persist progress index to ConfigNode, status: {}", result);
+          LOGGER.warn(
+              "Failed to push heartbeat shutdown pipe meta to ConfigNode, status {}, cost {} ms.",
+              result,
+              pushCostTime);
+          return false;
+        } else {
+          LOGGER.info(
+              "Successfully finished pushing heartbeat shutdown pipe meta to ConfigNode, pipe count {}, pipe meta count {}, pipe meta size {} bytes, cost {} ms.",
+              pipeCount,
+              pipeMetaCount,
+              pipeMetaSizeInBytes,
+              pushCostTime);
+          LOGGER.info("Successfully persisted all pipe's info to ConfigNode.");
+          return true;
+        }
       }
     } catch (final Exception e) {
-      LOGGER.warn(e.getMessage());
+      LOGGER.warn(
+          "Exception occurred while persisting all pipe progress indexes during shutdown.", e);
+      return false;
     }
   }
 
@@ -814,10 +923,23 @@ public class PipeDataNodeTaskAgent extends PipeTaskAgent {
     // If the source has pattern or path, we need to allocate memory
     isTSFileParser =
         isTSFileParser
-            || sourceParameters.hasAnyAttributes(EXTRACTOR_PATTERN_KEY, SOURCE_PATTERN_KEY);
+            || sourceParameters.hasAnyAttributes(
+                EXTRACTOR_PATTERN_KEY,
+                SOURCE_PATTERN_KEY,
+                EXTRACTOR_PATTERN_INCLUSION_KEY,
+                SOURCE_PATTERN_INCLUSION_KEY,
+                EXTRACTOR_PATTERN_EXCLUSION_KEY,
+                SOURCE_PATTERN_EXCLUSION_KEY);
 
     isTSFileParser =
-        isTSFileParser || sourceParameters.hasAnyAttributes(EXTRACTOR_PATH_KEY, SOURCE_PATH_KEY);
+        isTSFileParser
+            || sourceParameters.hasAnyAttributes(
+                EXTRACTOR_PATH_KEY,
+                SOURCE_PATH_KEY,
+                EXTRACTOR_PATH_INCLUSION_KEY,
+                SOURCE_PATH_INCLUSION_KEY,
+                EXTRACTOR_PATH_EXCLUSION_KEY,
+                SOURCE_PATH_EXCLUSION_KEY);
 
     // If the source is not hybrid, we do need to allocate memory
     isTSFileParser =
