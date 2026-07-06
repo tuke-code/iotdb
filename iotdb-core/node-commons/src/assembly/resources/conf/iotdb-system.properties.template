@@ -1730,7 +1730,7 @@ data_region_iot_max_pending_batches_num = 5
 # Datatype: double
 data_region_iot_max_memory_ratio_for_queue = 0.6
 
-# The maximum size in byte per second for region migration data transit and region file deletion
+# The maximum size in byte per second for region migration transfer and region file deletion
 # values less than or equal to 0 means no limit
 # effectiveMode: hot_reload
 # Datatype: long

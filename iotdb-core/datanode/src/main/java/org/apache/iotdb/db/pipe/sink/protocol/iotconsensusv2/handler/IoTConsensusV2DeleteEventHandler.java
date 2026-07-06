@@ -29,6 +29,7 @@ import org.apache.iotdb.db.i18n.DataNodePipeMessages;
 import org.apache.iotdb.db.pipe.consensus.metric.IoTConsensusV2SinkMetrics;
 import org.apache.iotdb.db.pipe.event.common.deletion.PipeDeleteDataNodeEvent;
 import org.apache.iotdb.db.pipe.sink.protocol.iotconsensusv2.IoTConsensusV2AsyncSink;
+import org.apache.iotdb.db.pipe.sink.protocol.iotconsensusv2.IoTConsensusV2RateLimiter;
 import org.apache.iotdb.pipe.api.exception.PipeException;
 import org.apache.iotdb.rpc.TSStatusCode;
 
@@ -65,6 +66,7 @@ public class IoTConsensusV2DeleteEventHandler
   }
 
   public void transfer(AsyncIoTConsensusV2ServiceClient client) throws TException {
+    IoTConsensusV2RateLimiter.acquire(req);
     client.iotConsensusV2Transfer(req, this);
   }
 
