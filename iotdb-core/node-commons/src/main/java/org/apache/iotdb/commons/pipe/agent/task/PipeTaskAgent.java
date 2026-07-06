@@ -510,11 +510,7 @@ public abstract class PipeTaskAgent {
     final String pipeName = pipeMetaFromCoordinator.getStaticMeta().getPipeName();
     final long creationTime = pipeMetaFromCoordinator.getStaticMeta().getCreationTime();
 
-    calculateMemoryUsage(
-        pipeMetaFromCoordinator.getStaticMeta(),
-        pipeMetaFromCoordinator.getStaticMeta().getExtractorParameters(),
-        pipeMetaFromCoordinator.getStaticMeta().getProcessorParameters(),
-        pipeMetaFromCoordinator.getStaticMeta().getConnectorParameters());
+    calculateMemoryUsage(pipeMetaFromCoordinator);
 
     final PipeMeta existedPipeMeta = pipeMetaKeeper.getPipeMeta(pipeName);
     if (existedPipeMeta != null) {
@@ -559,6 +555,15 @@ public abstract class PipeTaskAgent {
 
     // If the pipe status from coordinator is RUNNING, we will start the pipe later.
     return needToStartPipe;
+  }
+
+  protected void calculateMemoryUsage(final PipeMeta pipeMetaFromCoordinator)
+      throws IllegalPathException {
+    calculateMemoryUsage(
+        pipeMetaFromCoordinator.getStaticMeta(),
+        pipeMetaFromCoordinator.getStaticMeta().getExtractorParameters(),
+        pipeMetaFromCoordinator.getStaticMeta().getProcessorParameters(),
+        pipeMetaFromCoordinator.getStaticMeta().getConnectorParameters());
   }
 
   protected void calculateMemoryUsage(
