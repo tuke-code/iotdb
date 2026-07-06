@@ -70,9 +70,7 @@ public class AnalyzeUtilsTest {
             new Identifier("ts"),
             new LongLiteral("100"));
 
-    List<TableDeletionEntry> entries =
-        AnalyzeUtils.parseExpressions2ModEntries(
-            expression, table, "db", new MPPQueryContext(new QueryId("1")));
+    List<TableDeletionEntry> entries = parseExpressions2ModEntries(expression, table);
 
     assertEquals(1, entries.size());
     assertEquals(Long.MIN_VALUE, entries.get(0).getStartTime());
@@ -89,7 +87,7 @@ public class AnalyzeUtilsTest {
             ComparisonExpression.Operator.GREATER_THAN,
             new Identifier("time"),
             new LongLiteral(String.valueOf(Long.MAX_VALUE - 1)));
-    List<TableDeletionEntry> entries = AnalyzeUtils.parseExpressions2ModEntries(expression, table);
+    List<TableDeletionEntry> entries = parseExpressions2ModEntries(expression, table);
     assertEquals(1, entries.size());
     assertEquals(Long.MAX_VALUE, entries.get(0).getStartTime());
     assertEquals(Long.MAX_VALUE, entries.get(0).getEndTime());
@@ -99,7 +97,7 @@ public class AnalyzeUtilsTest {
             ComparisonExpression.Operator.LESS_THAN,
             new Identifier("time"),
             new LongLiteral(String.valueOf(Long.MIN_VALUE + 1)));
-    entries = AnalyzeUtils.parseExpressions2ModEntries(expression, table);
+    entries = parseExpressions2ModEntries(expression, table);
     assertEquals(1, entries.size());
     assertEquals(Long.MIN_VALUE, entries.get(0).getStartTime());
     assertEquals(Long.MIN_VALUE, entries.get(0).getEndTime());
@@ -113,7 +111,7 @@ public class AnalyzeUtilsTest {
     assertThrows(
         SemanticException.class,
         () ->
-            AnalyzeUtils.parseExpressions2ModEntries(
+            parseExpressions2ModEntries(
                 new ComparisonExpression(
                     ComparisonExpression.Operator.GREATER_THAN,
                     new Identifier("time"),
@@ -122,7 +120,7 @@ public class AnalyzeUtilsTest {
     assertThrows(
         SemanticException.class,
         () ->
-            AnalyzeUtils.parseExpressions2ModEntries(
+            parseExpressions2ModEntries(
                 new ComparisonExpression(
                     ComparisonExpression.Operator.LESS_THAN,
                     new Identifier("time"),
@@ -182,5 +180,11 @@ public class AnalyzeUtilsTest {
   private static TRegionReplicaSet dataRegionReplicaSet(final int regionId) {
     return new TRegionReplicaSet(
         new TConsensusGroupId(TConsensusGroupType.DataRegion, regionId), Collections.emptyList());
+  }
+
+  private static List<TableDeletionEntry> parseExpressions2ModEntries(
+      final Expression expression, final TsTable table) {
+    return AnalyzeUtils.parseExpressions2ModEntries(
+        expression, table, "db", new MPPQueryContext(new QueryId("test_query")));
   }
 }
