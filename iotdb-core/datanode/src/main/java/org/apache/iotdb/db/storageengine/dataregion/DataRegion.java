@@ -46,6 +46,7 @@ import org.apache.iotdb.commons.service.metric.PerformanceOverviewMetrics;
 import org.apache.iotdb.commons.service.metric.enums.Metric;
 import org.apache.iotdb.commons.service.metric.enums.Tag;
 import org.apache.iotdb.commons.utils.CommonDateTimeUtils;
+import org.apache.iotdb.commons.utils.RegionMigrationRateLimiter;
 import org.apache.iotdb.commons.utils.RetryUtils;
 import org.apache.iotdb.commons.utils.TestOnly;
 import org.apache.iotdb.commons.utils.TimePartitionUtils;
@@ -2257,8 +2258,8 @@ public class DataRegion implements IDataRegionForQuery {
       File dataRegionSystemFolder =
           SystemFileFactory.INSTANCE.getFile(
               systemDir + File.separator + databaseName, dataRegionIdString);
-      org.apache.iotdb.commons.utils.FileUtils.deleteDirectoryAndEmptyParent(
-          dataRegionSystemFolder);
+      org.apache.iotdb.commons.utils.FileUtils.deleteDirectoryAndEmptyParentWithRateLimiter(
+          dataRegionSystemFolder, RegionMigrationRateLimiter.getInstance()::acquire);
     } finally {
       writeUnlock();
     }
@@ -2348,8 +2349,8 @@ public class DataRegion implements IDataRegionForQuery {
         }
       } else {
         if (dataRegionDataFolder.exists()) {
-          org.apache.iotdb.commons.utils.FileUtils.deleteDirectoryAndEmptyParent(
-              dataRegionDataFolder);
+          org.apache.iotdb.commons.utils.FileUtils.deleteDirectoryAndEmptyParentWithRateLimiter(
+              dataRegionDataFolder, RegionMigrationRateLimiter.getInstance()::acquire);
         }
       }
     }
@@ -2392,7 +2393,8 @@ public class DataRegion implements IDataRegionForQuery {
         }
       } else {
         if (dataRegionObjectFolder.exists()) {
-          org.apache.iotdb.commons.utils.FileUtils.deleteFileOrDirectory(dataRegionObjectFolder);
+          org.apache.iotdb.commons.utils.FileUtils.deleteFileOrDirectoryWithRateLimiter(
+              dataRegionObjectFolder, RegionMigrationRateLimiter.getInstance()::acquire);
         }
       }
     }

@@ -33,6 +33,8 @@ import java.io.File;
 import java.io.IOException;
 import java.nio.file.Files;
 import java.util.Collections;
+import java.util.concurrent.atomic.AtomicInteger;
+import java.util.concurrent.atomic.AtomicLong;
 
 public class FileUtilsTest {
   private File tmpDir;
@@ -70,6 +72,45 @@ public class FileUtilsTest {
     Assert.assertNotNull(FileUtils.getIllegalError4Directory(null));
     Assert.assertNotNull(FileUtils.getIllegalError4Directory(""));
     Assert.assertNull(FileUtils.getIllegalError4Directory("valid_dir"));
+  }
+
+  @Test
+  public void testDeleteFileOrDirectoryWithRateLimiter() throws IOException {
+    File deleteDir = new File(tmpDir, "deleteWithRateLimiter");
+    File subDir = new File(deleteDir, "subDir");
+    Assert.assertTrue(subDir.mkdirs());
+    Files.write(new File(deleteDir, "file1").toPath(), new byte[3]);
+    Files.write(new File(subDir, "file2").toPath(), new byte[7]);
+    Files.write(new File(subDir, "empty").toPath(), new byte[0]);
+
+    AtomicLong acquiredBytes = new AtomicLong();
+    AtomicInteger acquiredFiles = new AtomicInteger();
+    FileUtils.deleteFileOrDirectoryWithRateLimiter(
+        deleteDir,
+        fileSize -> {
+          acquiredFiles.incrementAndGet();
+          acquiredBytes.addAndGet(fileSize);
+        });
+
+    Assert.assertFalse(deleteDir.exists());
+    Assert.assertEquals(3, acquiredFiles.get());
+    Assert.assertEquals(10, acquiredBytes.get());
+  }
+
+  @Test
+  public void testDeleteDirectoryAndEmptyParentWithRateLimiter() throws IOException {
+    File parentDir = new File(tmpDir, "parentDir");
+    File deleteDir = new File(parentDir, "deleteDir");
+    Assert.assertTrue(deleteDir.mkdirs());
+    Files.write(new File(deleteDir, "file").toPath(), new byte[5]);
+
+    AtomicLong acquiredBytes = new AtomicLong();
+    FileUtils.deleteDirectoryAndEmptyParentWithRateLimiter(deleteDir, acquiredBytes::addAndGet);
+
+    Assert.assertFalse(deleteDir.exists());
+    Assert.assertFalse(parentDir.exists());
+    Assert.assertTrue(tmpDir.exists());
+    Assert.assertEquals(5, acquiredBytes.get());
   }
 
   private void generateFile(File tsfile) throws WriteProcessException, IOException {

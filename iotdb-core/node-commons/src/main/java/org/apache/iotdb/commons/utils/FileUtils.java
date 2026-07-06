@@ -48,6 +48,7 @@ import java.util.ArrayList;
 import java.util.Arrays;
 import java.util.List;
 import java.util.Stack;
+import java.util.function.LongConsumer;
 
 public class FileUtils {
   private static final Logger LOGGER = LoggerFactory.getLogger(FileUtils.class);
@@ -111,13 +112,30 @@ public class FileUtils {
   }
 
   public static void deleteFileOrDirectory(File file, boolean quietForNoSuchFile) {
+    deleteFileOrDirectory(file, quietForNoSuchFile, null);
+  }
+
+  public static void deleteFileOrDirectoryWithRateLimiter(
+      File file, LongConsumer deleteRateLimiter) {
+    deleteFileOrDirectory(file, false, deleteRateLimiter);
+  }
+
+  public static void deleteFileOrDirectoryWithRateLimiter(
+      File file, boolean quietForNoSuchFile, LongConsumer deleteRateLimiter) {
+    deleteFileOrDirectory(file, quietForNoSuchFile, deleteRateLimiter);
+  }
+
+  private static void deleteFileOrDirectory(
+      File file, boolean quietForNoSuchFile, LongConsumer deleteRateLimiter) {
     if (file.isDirectory()) {
       File[] files = file.listFiles();
       if (files != null) {
         for (File subfile : files) {
-          deleteFileOrDirectory(subfile, quietForNoSuchFile);
+          deleteFileOrDirectory(subfile, quietForNoSuchFile, deleteRateLimiter);
         }
       }
+    } else if (deleteRateLimiter != null && file.isFile()) {
+      deleteRateLimiter.accept(file.length());
     }
     try {
       Files.delete(file.toPath());
@@ -161,7 +179,16 @@ public class FileUtils {
   }
 
   public static void deleteDirectoryAndEmptyParent(File folder) {
-    deleteFileOrDirectory(folder);
+    deleteDirectoryAndEmptyParent(folder, null);
+  }
+
+  public static void deleteDirectoryAndEmptyParentWithRateLimiter(
+      File folder, LongConsumer deleteRateLimiter) {
+    deleteDirectoryAndEmptyParent(folder, deleteRateLimiter);
+  }
+
+  private static void deleteDirectoryAndEmptyParent(File folder, LongConsumer deleteRateLimiter) {
+    deleteFileOrDirectory(folder, false, deleteRateLimiter);
     final File parentFolder = folder.getParentFile();
     File[] files = parentFolder.listFiles();
     if (parentFolder.isDirectory() && (files == null || files.length == 0)) {

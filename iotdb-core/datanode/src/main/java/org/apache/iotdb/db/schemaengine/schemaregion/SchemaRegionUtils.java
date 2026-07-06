@@ -29,6 +29,7 @@ import java.io.File;
 import java.io.IOException;
 import java.nio.file.Files;
 import java.util.Objects;
+import java.util.function.LongConsumer;
 
 public class SchemaRegionUtils {
 
@@ -37,6 +38,12 @@ public class SchemaRegionUtils {
   }
 
   public static void deleteSchemaRegionFolder(String schemaRegionDirPath, Logger logger)
+      throws MetadataException {
+    deleteSchemaRegionFolder(schemaRegionDirPath, logger, null);
+  }
+
+  public static void deleteSchemaRegionFolder(
+      String schemaRegionDirPath, Logger logger, LongConsumer deleteRateLimiter)
       throws MetadataException {
     File schemaRegionDir = SystemFileFactory.INSTANCE.getFile(schemaRegionDirPath);
     File[] sgFiles = schemaRegionDir.listFiles();
@@ -47,6 +54,9 @@ public class SchemaRegionUtils {
     }
     for (File file : sgFiles) {
       try {
+        if (deleteRateLimiter != null && file.isFile()) {
+          deleteRateLimiter.accept(file.length());
+        }
         Files.delete(file.toPath());
         logger.info(DataNodeSchemaMessages.DELETE_SCHEMA_REGION_FILE, file.getAbsolutePath());
       } catch (IOException e) {

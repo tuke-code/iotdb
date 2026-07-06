@@ -33,6 +33,7 @@ import org.apache.iotdb.commons.schema.SchemaConstant;
 import org.apache.iotdb.commons.service.metric.MetricService;
 import org.apache.iotdb.commons.utils.JVMCommonUtils;
 import org.apache.iotdb.commons.utils.NodeUrlUtils;
+import org.apache.iotdb.commons.utils.RegionMigrationRateLimiter;
 import org.apache.iotdb.confignode.rpc.thrift.TCQConfig;
 import org.apache.iotdb.confignode.rpc.thrift.TGlobalConfig;
 import org.apache.iotdb.confignode.rpc.thrift.TRatisConfig;
@@ -1290,6 +1291,8 @@ public class IoTDBDescriptor {
                 "region_migration_speed_limit_bytes_per_second",
                 ConfigurationFileUtils.getConfigurationDefaultValue(
                     "region_migration_speed_limit_bytes_per_second"))));
+    RegionMigrationRateLimiter.getInstance()
+        .init(conf.getRegionMigrationSpeedLimitBytesPerSecond());
     conf.setDataRegionIotSnapshotTransmissionProgressLogIntervalMs(
         Long.parseLong(
             properties.getProperty(
