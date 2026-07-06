@@ -207,6 +207,9 @@ public class PipeTableResp implements DataSet {
           runtimeMeta.getNodeId2PipeRuntimeExceptionMap().entrySet()) {
         final Integer nodeId = entry.getKey();
         final PipeRuntimeException e = entry.getValue();
+        if (e.getTimeStamp() <= runtimeMeta.getExceptionsClearTime()) {
+          continue;
+        }
         final String exceptionMessage =
             DateTimeUtils.convertLongToDate(e.getTimeStamp(), "ms") + ", " + e.getMessage();
 
@@ -219,6 +222,9 @@ public class PipeTableResp implements DataSet {
           runtimeMeta.getConsensusGroupId2TaskMetaMap().entrySet()) {
         final Integer regionId = entry.getKey();
         for (final PipeRuntimeException e : entry.getValue().getExceptionMessages()) {
+          if (e.getTimeStamp() <= runtimeMeta.getExceptionsClearTime()) {
+            continue;
+          }
           final String exceptionMessage =
               DateTimeUtils.convertLongToDate(e.getTimeStamp(), "ms") + ", " + e.getMessage();
           pipeExceptionMessage2RegionIdsMap
@@ -283,6 +289,10 @@ public class PipeTableResp implements DataSet {
           canCalculateOnLocal ? -1 : temporaryMeta.getGlobalRemainingEvents());
       showPipeInfo.setEstimatedRemainingTime(
           canCalculateOnLocal ? -1 : temporaryMeta.getGlobalRemainingTime());
+      final Boolean isDegraded = temporaryMeta.getGlobalDegraded();
+      if (Objects.nonNull(isDegraded)) {
+        showPipeInfo.setIsDegraded(isDegraded);
+      }
       showPipeInfoList.add(showPipeInfo);
     }
 

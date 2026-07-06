@@ -21,6 +21,7 @@ package org.apache.iotdb.session.subscription.payload;
 
 import org.apache.iotdb.rpc.subscription.exception.SubscriptionIncompatibleHandlerException;
 import org.apache.iotdb.rpc.subscription.exception.SubscriptionRuntimeException;
+import org.apache.iotdb.rpc.subscription.i18n.SubscriptionMessages;
 import org.apache.iotdb.rpc.subscription.payload.poll.SubscriptionCommitContext;
 
 import org.apache.thrift.annotation.Nullable;
@@ -122,7 +123,8 @@ public class SubscriptionMessage implements Comparable<SubscriptionMessage> {
   public long getWatermarkTimestamp() {
     if (messageType != SubscriptionMessageType.WATERMARK.getType()) {
       throw new IllegalStateException(
-          "Watermark timestamp is only available for watermark messages, actual message type: "
+          SubscriptionMessages
+                  .EXCEPTION_WATERMARK_TIMESTAMP_ONLY_AVAILABLE_WATERMARK_MESSAGES_ACTUAL_MESSAGE_TYPE_F8E32C57
               + messageType);
     }
     return watermarkTimestamp;
@@ -208,7 +210,9 @@ public class SubscriptionMessage implements Comparable<SubscriptionMessage> {
       return ((SubscriptionRecordHandler) handler).getResultSets();
     }
     throw new SubscriptionIncompatibleHandlerException(
-        String.format("%s do not support getResultSets().", handler.getClass().getSimpleName()));
+        String.format(
+            SubscriptionMessages.EXCEPTION_ARG_DO_NOT_SUPPORT_GETRESULTSETS_7789852D,
+            handler.getClass().getSimpleName()));
   }
 
   public Iterator<Tablet> getRecordTabletIterator() {
@@ -221,7 +225,8 @@ public class SubscriptionMessage implements Comparable<SubscriptionMessage> {
     }
     throw new SubscriptionIncompatibleHandlerException(
         String.format(
-            "%s do not support getRecordTabletIterator().", handler.getClass().getSimpleName()));
+            SubscriptionMessages.EXCEPTION_ARG_DO_NOT_SUPPORT_GETRECORDTABLETITERATOR_46B4A489,
+            handler.getClass().getSimpleName()));
   }
 
   public SubscriptionTsFileHandler getTsFile() {
@@ -229,13 +234,17 @@ public class SubscriptionMessage implements Comparable<SubscriptionMessage> {
       return (SubscriptionTsFileHandler) handler;
     }
     throw new SubscriptionIncompatibleHandlerException(
-        String.format("%s do not support getTsFile().", handler.getClass().getSimpleName()));
+        String.format(
+            SubscriptionMessages.EXCEPTION_ARG_DO_NOT_SUPPORT_GETTSFILE_40D23462,
+            handler.getClass().getSimpleName()));
   }
 
   private void ensureUserDataAvailable() {
     if (userDataRemoved) {
       throw new SubscriptionRuntimeException(
-          String.format("User data has been removed from %s.", getClass().getSimpleName()));
+          String.format(
+              SubscriptionMessages.EXCEPTION_USER_DATA_HAS_BEEN_REMOVED_ARG_7093644B,
+              getClass().getSimpleName()));
     }
   }
 }
