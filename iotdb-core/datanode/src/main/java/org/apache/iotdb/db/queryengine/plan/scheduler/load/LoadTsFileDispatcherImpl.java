@@ -130,7 +130,9 @@ public class LoadTsFileDispatcherImpl implements IFragInstanceDispatcher, AutoCl
                   return new FragInstanceDispatchResult(
                       RpcUtils.getStatus(
                           TSStatusCode.INTERNAL_SERVER_ERROR,
-                          "Unexpected errors: " + t.getMessage()));
+                          String.format(
+                              DataNodeQueryMessages.MESSAGE_UNEXPECTED_ERRORS_ARG_78EE0800,
+                              t.getMessage())));
                 }
               }
               return new FragInstanceDispatchResult(true);
@@ -270,15 +272,22 @@ public class LoadTsFileDispatcherImpl implements IFragInstanceDispatcher, AutoCl
         }
       } catch (FragmentInstanceDispatchException e) {
         LOGGER.warn(
-            "Cannot dispatch LoadCommand for load operation {}", duplicatedLoadCommandReq, e);
+            DataNodeQueryMessages.CANNOT_DISPATCH_LOADCOMMAND_FOR_LOAD_OPERATION_ARG,
+            duplicatedLoadCommandReq,
+            e);
         return immediateFuture(new FragInstanceDispatchResult(e.getFailureStatus()));
       } catch (Exception t) {
         LOGGER.warn(
-            "Cannot dispatch LoadCommand for load operation {}", duplicatedLoadCommandReq, t);
+            DataNodeQueryMessages.CANNOT_DISPATCH_LOADCOMMAND_FOR_LOAD_OPERATION_ARG,
+            duplicatedLoadCommandReq,
+            t);
         return immediateFuture(
             new FragInstanceDispatchResult(
                 RpcUtils.getStatus(
-                    TSStatusCode.INTERNAL_SERVER_ERROR, "Unexpected errors: " + t.getMessage())));
+                    TSStatusCode.INTERNAL_SERVER_ERROR,
+                    String.format(
+                        DataNodeQueryMessages.MESSAGE_UNEXPECTED_ERRORS_ARG_78EE0800,
+                        t.getMessage()))));
       }
     }
     return immediateFuture(new FragInstanceDispatchResult(true));
@@ -361,7 +370,8 @@ public class LoadTsFileDispatcherImpl implements IFragInstanceDispatcher, AutoCl
         if (newConnectionTimeout != CONNECTION_TIMEOUT_MS.get()) {
           CONNECTION_TIMEOUT_MS.set(newConnectionTimeout);
           LOGGER.info(
-              "Load remote procedure call connection timeout is adjusted to {} ms ({} mins)",
+              DataNodeQueryMessages
+                  .LOAD_REMOTE_PROCEDURE_CALL_CONNECTION_TIMEOUT_IS_ADJUSTED_TO_ARG_MS_ARG_MINS,
               newConnectionTimeout,
               newConnectionTimeout / 60000.0);
         }
