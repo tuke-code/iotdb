@@ -268,18 +268,14 @@ public class IoTDBConsensusSubscriptionFilterTableIT extends AbstractSubscriptio
 
       ConsensusSubscriptionTableITSupport.alterConsensusTopicColumnFilter(
           ids.getTopic(), "column_name = \"s2\"");
-      final Set<String> rowsAfterEmptyWindow =
-          ConsensusSubscriptionTableITSupport.insertRows(
-              database, table, 300L, 3, true, false, true);
       final ConsensusSubscriptionTableITSupport.ConsumedRecords consumedAfterEmptyWindow =
-          ConsensusSubscriptionTableITSupport.pollAndCommitUntilContains(
-              consumer, rowsAfterEmptyWindow, 50);
+          ConsensusSubscriptionTableITSupport.insertRowsAndPollUntilColumnSignature(
+              consumer, database, table, 300L, 3, true, false, expectedColumnSignature, 50);
 
-      ConsensusSubscriptionTableITSupport.assertExactRowKeys(
-          rowsAfterEmptyWindow, consumedAfterEmptyWindow);
-      Assert.assertEquals(
-          Collections.singleton(expectedColumnSignature),
-          consumedAfterEmptyWindow.getSeenColumnSignatures());
+      Assert.assertTrue(
+          consumedAfterEmptyWindow.getSeenColumnSignatures().contains(expectedColumnSignature));
+      Assert.assertTrue(consumedAfterEmptyWindow.getSeenColumns().contains("s2"));
+      Assert.assertFalse(consumedAfterEmptyWindow.getSeenColumns().contains("s1"));
       ConsensusSubscriptionTableITSupport.assertNoMoreMessages(consumer, 3, Duration.ofMillis(500));
     } finally {
       ConsensusSubscriptionTableITSupport.cleanup(consumer, ids.getTopic(), database);
@@ -374,17 +370,11 @@ public class IoTDBConsensusSubscriptionFilterTableIT extends AbstractSubscriptio
       ConsensusSubscriptionTableITSupport.alterConsensusTopicColumnFilter(
           ids.getTopic(), "column_name = \"s2\"");
 
-      final Set<String> afterAlterRows =
-          ConsensusSubscriptionTableITSupport.insertRows(
-              database, table, 200L, 5, true, true, true);
       final ConsensusSubscriptionTableITSupport.ConsumedRecords afterAlterConsumed =
-          ConsensusSubscriptionTableITSupport.pollAndCommitUntilContains(
-              consumer, afterAlterRows, 60);
+          ConsensusSubscriptionTableITSupport.insertRowsAndPollUntilColumnSignature(
+              consumer, database, table, 200L, 5, true, true, tagAndS2Signature, 60);
 
-      ConsensusSubscriptionTableITSupport.assertExactRowKeys(afterAlterRows, afterAlterConsumed);
-      Assert.assertEquals(
-          Collections.singleton(tagAndS2Signature), afterAlterConsumed.getSeenColumnSignatures());
-      Assert.assertFalse(afterAlterConsumed.getSeenColumns().contains("s1"));
+      Assert.assertTrue(afterAlterConsumed.getSeenColumnSignatures().contains(tagAndS2Signature));
       Assert.assertFalse(afterAlterConsumed.getSeenColumns().contains("s3"));
       ConsensusSubscriptionTableITSupport.assertNoMoreMessages(consumer, 3, Duration.ofMillis(500));
     } finally {

@@ -47,7 +47,9 @@ import java.util.Map;
 import java.util.Properties;
 import java.util.Set;
 import java.util.concurrent.TimeUnit;
+import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.concurrent.atomic.AtomicInteger;
+import java.util.concurrent.atomic.AtomicLong;
 
 final class ConsensusSubscriptionTableITSupport {
 
@@ -56,6 +58,7 @@ final class ConsensusSubscriptionTableITSupport {
   private static final AtomicInteger IDENTIFIER = new AtomicInteger(0);
   private static final Duration DEFAULT_POLL_TIMEOUT = Duration.ofSeconds(1);
   private static final Duration DEFAULT_DRAIN_TIMEOUT = Duration.ofMinutes(2);
+  private static final long ALTER_PROBE_INSERT_INTERVAL_MS = 1_000L;
   private static final int QUIET_ROUNDS_AFTER_DATA = 3;
   private static final int QUIET_ROUNDS_WITHOUT_DATA = 8;
 
@@ -301,6 +304,47 @@ final class ConsensusSubscriptionTableITSupport {
     return consumed;
   }
 
+  static ConsumedRecords insertRowsAndPollUntilColumnSignature(
+      final SubscriptionTablePullConsumer consumer,
+      final String database,
+      final String tableName,
+      final long startTimestampInclusive,
+      final int rowCountPerInsert,
+      final boolean includeS2,
+      final boolean includeS3,
+      final String expectedColumnSignature,
+      final int maxPollRounds)
+      throws Exception {
+    final ConsumedRecords consumed = new ConsumedRecords();
+    final AtomicBoolean expectedSignatureSeen = new AtomicBoolean(false);
+    final AtomicInteger emptyRounds = new AtomicInteger(0);
+    final AtomicLong nextTimestamp = new AtomicLong(startTimestampInclusive);
+    final AtomicLong lastInsertTimeMs = new AtomicLong(0L);
+    awaitDrain(maxPollRounds, DEFAULT_POLL_TIMEOUT)
+        .untilAsserted(
+            () -> {
+              if (!expectedSignatureSeen.get()) {
+                insertProbeRowsIfNecessary(
+                    database,
+                    tableName,
+                    rowCountPerInsert,
+                    includeS2,
+                    includeS3,
+                    nextTimestamp,
+                    lastInsertTimeMs);
+              }
+              pollAndCommitOnce(consumer, DEFAULT_POLL_TIMEOUT, consumed, emptyRounds);
+              if (consumed.getSeenColumnSignatures().contains(expectedColumnSignature)) {
+                expectedSignatureSeen.set(true);
+              }
+              Assert.assertTrue(
+                  columnSignatureTimeoutMessage(expectedColumnSignature, consumed),
+                  expectedSignatureSeen.get() && emptyRounds.get() >= QUIET_ROUNDS_AFTER_DATA);
+            });
+
+    return consumed;
+  }
+
   static ConsumedRecords pollWithInfoAndCommitUntilAtLeast(
       final SubscriptionTablePullConsumer consumer,
       final Set<String> topicNames,
@@ -480,6 +524,32 @@ final class ConsensusSubscriptionTableITSupport {
     consumer.commitSync(messages);
   }
 
+  private static void insertProbeRowsIfNecessary(
+      final String database,
+      final String tableName,
+      final int rowCountPerInsert,
+      final boolean includeS2,
+      final boolean includeS3,
+      final AtomicLong nextTimestamp,
+      final AtomicLong lastInsertTimeMs)
+      throws Exception {
+    final long now = System.currentTimeMillis();
+    final long lastInsert = lastInsertTimeMs.get();
+    if (lastInsert > 0L && now - lastInsert < ALTER_PROBE_INSERT_INTERVAL_MS) {
+      return;
+    }
+
+    insertRows(
+        database,
+        tableName,
+        nextTimestamp.getAndAdd(rowCountPerInsert),
+        rowCountPerInsert,
+        includeS2,
+        includeS3,
+        true);
+    lastInsertTimeMs.set(System.currentTimeMillis());
+  }
+
   private static ConditionFactory awaitDrain(
       final int legacyMaxPollRounds, final Duration pollTimeout) {
     final Duration drainTimeout = drainTimeout(legacyMaxPollRounds, pollTimeout);
@@ -528,6 +598,14 @@ final class ConsensusSubscriptionTableITSupport {
       final Set<String> expectedRowKeys, final ConsumedRecords consumed) {
     return "Expected row keys were not fully collected before the subscription drain timeout. "
         + rowKeyDiffMessage(expectedRowKeys, consumed);
+  }
+
+  private static String columnSignatureTimeoutMessage(
+      final String expectedColumnSignature, final ConsumedRecords consumed) {
+    return "Expected column signature "
+        + expectedColumnSignature
+        + " before the subscription drain timeout. Consumed records: "
+        + consumed;
   }
 
   private static String rowKeyDiffMessage(
