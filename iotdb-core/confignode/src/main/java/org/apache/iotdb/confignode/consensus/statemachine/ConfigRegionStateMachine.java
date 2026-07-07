@@ -782,7 +782,7 @@ public class ConfigRegionStateMachine implements IStateMachine, IStateMachine.Ev
     }
   }
 
-  private static long parseEndIndex(String filename) {
+  static long parseEndIndex(String filename) {
     final String endIndexString;
     if (filename.startsWith(LOG_INPROGRESS_FILE_PREFIX)) {
       endIndexString = filename.substring(LOG_INPROGRESS_FILE_PREFIX.length());

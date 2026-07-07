@@ -39,6 +39,7 @@ import java.nio.file.Files;
 import java.nio.file.Path;
 import java.util.ArrayList;
 import java.util.Arrays;
+import java.util.Comparator;
 import java.util.List;
 
 public class ConfigRegionStateMachineTest {
@@ -52,11 +53,19 @@ public class ConfigRegionStateMachineTest {
   }
 
   @Test
-  public void testFileComparatorSortsByStartIndex() {
+  public void testParseEndIndex() {
+    Assert.assertEquals(10, ConfigRegionStateMachine.parseEndIndex("log_1_10"));
+    Assert.assertEquals(20, ConfigRegionStateMachine.parseEndIndex("log_11_20"));
+    Assert.assertEquals(21, ConfigRegionStateMachine.parseEndIndex("log_inprogress_21"));
+    Assert.assertEquals(0, ConfigRegionStateMachine.parseEndIndex("invalid"));
+  }
+
+  @Test
+  public void testLogFilesSortByEndIndex() {
     List<String> filenames =
         new ArrayList<>(Arrays.asList("log_inprogress_21", "log_11_20", "log_1_10"));
 
-    filenames.sort(new ConfigRegionStateMachine.FileComparator());
+    filenames.sort(Comparator.comparingLong(ConfigRegionStateMachine::parseEndIndex));
 
     Assert.assertEquals(Arrays.asList("log_1_10", "log_11_20", "log_inprogress_21"), filenames);
   }
