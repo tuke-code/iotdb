@@ -26,6 +26,7 @@ import org.apache.iotdb.commons.consensus.index.impl.HybridProgressIndex;
 import org.apache.iotdb.commons.consensus.index.impl.MinimumProgressIndex;
 import org.apache.iotdb.commons.consensus.index.impl.RecoverProgressIndex;
 import org.apache.iotdb.commons.consensus.index.impl.StateProgressIndex;
+import org.apache.iotdb.commons.consensus.index.impl.TimePartitionProgressIndex;
 import org.apache.iotdb.commons.consensus.index.impl.TimeWindowStateProgressIndex;
 import org.apache.iotdb.commons.exception.IllegalPathException;
 import org.apache.iotdb.commons.pipe.agent.task.PipeTaskAgent;
@@ -460,41 +461,72 @@ public class PipeHistoricalDataRegionTsFileAndDeletionSource
    *
    * @return recoverProgressIndex dedicated in local DataNodeId or origin for fallback.
    */
-  private ProgressIndex tryToExtractLocalProgressIndexForIoTV2(ProgressIndex origin) {
-    // There are only 2 cases:
-    // 1. origin is RecoverProgressIndex
-    if (origin instanceof RecoverProgressIndex) {
-      RecoverProgressIndex toBeTransformed = (RecoverProgressIndex) origin;
-      return extractRecoverProgressIndex(toBeTransformed);
+  private ProgressIndex tryToExtractLocalProgressIndexForIoTV2(final ProgressIndex origin) {
+    return tryToExtractLocalProgressIndexForIoTV2(origin, true);
+  }
+
+  private ProgressIndex tryToExtractLocalProgressIndexForIoTV2(
+      final ProgressIndex origin, final boolean shouldWarnUnexpectedType) {
+    if (Objects.isNull(origin)) {
+      return MinimumProgressIndex.INSTANCE;
     }
-    // 2. origin is HybridProgressIndex
-    else if (origin instanceof HybridProgressIndex) {
-      HybridProgressIndex toBeTransformed = (HybridProgressIndex) origin;
-      // if hybridProgressIndex contains recoverProgressIndex, which is what we expected.
-      if (toBeTransformed
-          .getType2Index()
-          .containsKey(ProgressIndexType.RECOVER_PROGRESS_INDEX.getType())) {
-        // 2.1. transform recoverProgressIndex
-        RecoverProgressIndex specificToBeTransformed =
-            (RecoverProgressIndex)
-                toBeTransformed
-                    .getType2Index()
-                    .get(ProgressIndexType.RECOVER_PROGRESS_INDEX.getType());
-        return extractRecoverProgressIndex(specificToBeTransformed);
+
+    if (origin instanceof StateProgressIndex) {
+      final StateProgressIndex stateProgressIndex = (StateProgressIndex) origin;
+      return new StateProgressIndex(
+          stateProgressIndex.getVersion(),
+          stateProgressIndex.getState(),
+          tryToExtractLocalProgressIndexForIoTV2(
+              stateProgressIndex.getInnerProgressIndex(), shouldWarnUnexpectedType));
+    }
+
+    if (origin instanceof RecoverProgressIndex) {
+      return extractRecoverProgressIndex((RecoverProgressIndex) origin);
+    }
+
+    if (origin instanceof TimePartitionProgressIndex) {
+      return new TimePartitionProgressIndex(
+          ((TimePartitionProgressIndex) origin)
+              .getTimePartitionId2ProgressIndex().entrySet().stream()
+                  .collect(
+                      Collectors.toMap(
+                          Map.Entry::getKey,
+                          entry ->
+                              tryToExtractLocalProgressIndexForIoTV2(entry.getValue(), false))));
+    }
+
+    if (origin instanceof HybridProgressIndex) {
+      final Map<Short, ProgressIndex> type2Index = ((HybridProgressIndex) origin).getType2Index();
+      ProgressIndex result = null;
+      if (type2Index.containsKey(ProgressIndexType.RECOVER_PROGRESS_INDEX.getType())) {
+        result =
+            extractRecoverProgressIndex(
+                (RecoverProgressIndex)
+                    type2Index.get(ProgressIndexType.RECOVER_PROGRESS_INDEX.getType()));
       }
-      // if hybridProgressIndex doesn't contain recoverProgressIndex, which is not what we expected,
-      // fallback.
-      return origin;
-    } else {
-      // fallback
+      if (type2Index.containsKey(ProgressIndexType.TIME_PARTITION_PROGRESS_INDEX.getType())) {
+        final ProgressIndex timePartitionProgressIndex =
+            tryToExtractLocalProgressIndexForIoTV2(
+                type2Index.get(ProgressIndexType.TIME_PARTITION_PROGRESS_INDEX.getType()), false);
+        result =
+            Objects.isNull(result)
+                ? timePartitionProgressIndex
+                : result.updateToMinimumEqualOrIsAfterProgressIndex(timePartitionProgressIndex);
+      }
+      if (Objects.nonNull(result)) {
+        return result;
+      }
+    }
+
+    if (shouldWarnUnexpectedType) {
       LOGGER.warn(
           DataNodePipeMessages.PIPE_UNEXPECTED_PROGRESSINDEX_TYPE_FALLBACK_TO_ORIGIN,
           pipeName,
           dataRegionId,
           origin.getType(),
           origin);
-      return origin;
     }
+    return origin;
   }
 
   private ProgressIndex extractRecoverProgressIndex(RecoverProgressIndex toBeTransformed) {
@@ -602,16 +634,26 @@ public class PipeHistoricalDataRegionTsFileAndDeletionSource
   private void prepareProgressReportResourcesForHistoricalTsFileQueryPriorityOrder(
       final List<PersistentResource> resourceList) {
     historicalProgressReportResources.clear();
-    final List<ProgressIndex> remainingMinimalProgressIndexes = new ArrayList<>();
+    final Map<Long, List<ProgressIndex>> timePartitionId2RemainingMinimalProgressIndexes =
+        new HashMap<>();
     for (int i = resourceList.size() - 1; i >= 0; --i) {
       final PersistentResource resource = resourceList.get(i);
+      if (!(resource instanceof TsFileResource)) {
+        continue;
+      }
+
       final ProgressIndex progressIndex = resource.getProgressIndex();
       if (Objects.isNull(progressIndex)) {
         continue;
       }
 
-      // A resource can report progress only if that progress will not cover any later resource.
-      // Otherwise a restart may skip untransferred data.
+      final List<ProgressIndex> remainingMinimalProgressIndexes =
+          timePartitionId2RemainingMinimalProgressIndexes.computeIfAbsent(
+              ((TsFileResource) resource).getTimePartition(), ignored -> new ArrayList<>());
+      // A query-priority report is persisted as a time-partition-scoped progress index. Recovery
+      // only uses it to cover TsFiles from the same partition, so it does not rely on any global
+      // ordering guarantee between partitions. A numerically larger progress in partition A cannot
+      // skip an untransferred resource in partition B.
       if (remainingMinimalProgressIndexes.stream().noneMatch(progressIndex::isEqualOrAfter)) {
         historicalProgressReportResources.add(resource);
       }
@@ -864,13 +906,11 @@ public class PipeHistoricalDataRegionTsFileAndDeletionSource
   }
 
   private boolean mayTsFileContainUnprocessedData(final TsFileResource resource) {
-    if (startIndex instanceof TimeWindowStateProgressIndex) {
+    final ProgressIndex innerStartIndex = getInnerProgressIndex(startIndex);
+    if (innerStartIndex instanceof TimeWindowStateProgressIndex) {
       // The resource is closed thus the TsFileResource#getFileEndTime() is safe to use
-      return ((TimeWindowStateProgressIndex) startIndex).getMinTime() <= resource.getFileEndTime();
-    }
-
-    if (startIndex instanceof StateProgressIndex) {
-      startIndex = ((StateProgressIndex) startIndex).getInnerProgressIndex();
+      return ((TimeWindowStateProgressIndex) innerStartIndex).getMinTime()
+          <= resource.getFileEndTime();
     }
 
     if (pipeName.startsWith(PipeStaticMeta.CONSENSUS_PIPE_PREFIX)) {
@@ -886,18 +926,64 @@ public class PipeHistoricalDataRegionTsFileAndDeletionSource
 
   private boolean isProgressIndexNotCoveredByStartIndex(
       PersistentResource resource, ProgressIndex progressIndex) {
-    if (!startIndex.isEqualOrAfter(progressIndex)) {
-      LOGGER.info(
-          DataNodePipeMessages
-              .PIPE_RESOURCE_MEETS_MAYTSFILECONTAINUNPROCESSEDDATA_CONDITION_EXTRACT,
-          pipeName,
-          dataRegionId,
-          resource,
-          startIndex,
-          progressIndex);
-      return true;
+    final ProgressIndex innerStartIndex = getInnerProgressIndex(startIndex);
+    if (innerStartIndex.isEqualOrAfter(progressIndex)
+        || isProgressIndexCoveredByTimePartitionProgressIndex(
+            resource, progressIndex, innerStartIndex)) {
+      return false;
     }
-    return false;
+
+    LOGGER.info(
+        DataNodePipeMessages.PIPE_RESOURCE_MEETS_MAYTSFILECONTAINUNPROCESSEDDATA_CONDITION_EXTRACT,
+        pipeName,
+        dataRegionId,
+        resource,
+        innerStartIndex,
+        progressIndex);
+    return true;
+  }
+
+  private ProgressIndex getInnerProgressIndex(final ProgressIndex progressIndex) {
+    return progressIndex instanceof StateProgressIndex
+        ? ((StateProgressIndex) progressIndex).getInnerProgressIndex()
+        : Objects.isNull(progressIndex) ? MinimumProgressIndex.INSTANCE : progressIndex;
+  }
+
+  private boolean isProgressIndexCoveredByTimePartitionProgressIndex(
+      final PersistentResource resource,
+      final ProgressIndex progressIndex,
+      final ProgressIndex startIndex) {
+    if (!(resource instanceof TsFileResource)) {
+      return false;
+    }
+
+    final TimePartitionProgressIndex timePartitionProgressIndex =
+        getTimePartitionProgressIndex(startIndex);
+    // Keep this check strictly partition-local, matching the reporting side. This is what makes
+    // query-priority historical transfer restart-safe even when different partitions are sent in an
+    // order that conflicts with the global ProgressIndex order.
+    return Objects.nonNull(timePartitionProgressIndex)
+        && timePartitionProgressIndex.isProgressIndexEqualOrAfter(
+            ((TsFileResource) resource).getTimePartition(), progressIndex);
+  }
+
+  private TimePartitionProgressIndex getTimePartitionProgressIndex(
+      final ProgressIndex progressIndex) {
+    final ProgressIndex innerProgressIndex = getInnerProgressIndex(progressIndex);
+    if (innerProgressIndex instanceof TimePartitionProgressIndex) {
+      return (TimePartitionProgressIndex) innerProgressIndex;
+    }
+
+    if (innerProgressIndex instanceof HybridProgressIndex) {
+      final ProgressIndex timePartitionProgressIndex =
+          ((HybridProgressIndex) innerProgressIndex)
+              .getType2Index()
+              .get(ProgressIndexType.TIME_PARTITION_PROGRESS_INDEX.getType());
+      if (timePartitionProgressIndex instanceof TimePartitionProgressIndex) {
+        return (TimePartitionProgressIndex) timePartitionProgressIndex;
+      }
+    }
+    return null;
   }
 
   private static class HistoricalTsFileExtractionStatistics {
@@ -1055,7 +1141,8 @@ public class PipeHistoricalDataRegionTsFileAndDeletionSource
           pendingQueue.poll();
           if (shouldUseHistoricalTsFileQueryPriorityOrder()) {
             if (shouldReportHistoricalProgressAfterResource(tsFileResource)) {
-              return supplyHistoricalProgressReportEvent(tsFileResource.getMaxProgressIndex());
+              return supplyHistoricalProgressReportEvent(
+                  getHistoricalProgressIndexAfterResource(tsFileResource));
             }
             continue;
           }
@@ -1065,7 +1152,8 @@ public class PipeHistoricalDataRegionTsFileAndDeletionSource
         final Event event = supplyTsFileEvent(tsFileResource);
         pendingQueue.poll();
         if (Objects.nonNull(event) && shouldReportHistoricalProgressAfterResource(tsFileResource)) {
-          pendingHistoricalProgressIndexToReport = tsFileResource.getMaxProgressIndex();
+          pendingHistoricalProgressIndexToReport =
+              getHistoricalProgressIndexAfterResource(tsFileResource);
         }
         return event;
       }
@@ -1079,6 +1167,11 @@ public class PipeHistoricalDataRegionTsFileAndDeletionSource
   private boolean shouldReportHistoricalProgressAfterResource(final PersistentResource resource) {
     return shouldUseHistoricalTsFileQueryPriorityOrder()
         && historicalProgressReportResources.remove(resource);
+  }
+
+  private ProgressIndex getHistoricalProgressIndexAfterResource(final TsFileResource resource) {
+    return new TimePartitionProgressIndex(
+        resource.getTimePartition(), resource.getMaxProgressIndex());
   }
 
   private Event supplyTerminateEvent() {

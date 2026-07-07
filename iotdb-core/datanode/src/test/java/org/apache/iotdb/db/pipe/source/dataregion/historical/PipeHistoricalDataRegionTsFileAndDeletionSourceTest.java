@@ -25,6 +25,7 @@ import org.apache.iotdb.commons.consensus.index.impl.IoTProgressIndex;
 import org.apache.iotdb.commons.consensus.index.impl.MinimumProgressIndex;
 import org.apache.iotdb.commons.consensus.index.impl.RecoverProgressIndex;
 import org.apache.iotdb.commons.consensus.index.impl.SimpleProgressIndex;
+import org.apache.iotdb.commons.consensus.index.impl.TimePartitionProgressIndex;
 import org.apache.iotdb.commons.pipe.agent.task.meta.PipeTaskMeta;
 import org.apache.iotdb.commons.pipe.config.constant.PipeSourceConstant;
 import org.apache.iotdb.commons.pipe.config.plugin.configuraion.PipeTaskRuntimeConfiguration;
@@ -424,6 +425,96 @@ public class PipeHistoricalDataRegionTsFileAndDeletionSourceTest {
 
   @Test
   @SuppressWarnings("unchecked")
+  public void testQueryPriorityOrderPreparesSafeProgressReportsByTimePartition() throws Exception {
+    final PipeHistoricalDataRegionTsFileAndDeletionSource source =
+        new PipeHistoricalDataRegionTsFileAndDeletionSource();
+    final File tempDir =
+        Files.createTempDirectory("pipeHistoricalTsFilePartitionProgress").toFile();
+
+    try {
+      final TsFileResource partition0Progress100 =
+          createTsFileResource(tempDir, 0L, "100-1-0-0.tsfile");
+      partition0Progress100.updateProgressIndex(new SimpleProgressIndex(0, 100));
+      final TsFileResource partition1Progress20 =
+          createTsFileResource(tempDir, 1L, "20-1-0-0.tsfile");
+      partition1Progress20.updateProgressIndex(new SimpleProgressIndex(0, 20));
+      final List<PersistentResource> resources =
+          new ArrayList<>(Arrays.asList(partition0Progress100, partition1Progress20));
+      prepareProgressReportResourcesForHistoricalTsFileQueryPriorityOrder(source, resources);
+
+      Assert.assertEquals(
+          new HashSet<>(Arrays.asList(partition0Progress100, partition1Progress20)),
+          getPrivateField(source, "historicalProgressReportResources"));
+    } finally {
+      FileUtils.deleteFileOrDirectory(tempDir);
+    }
+  }
+
+  @Test
+  @SuppressWarnings("unchecked")
+  public void testQueryPriorityOrderSuppliesPartitionProgressForOutOfGlobalOrderTsFiles()
+      throws Exception {
+    final TestablePipeHistoricalDataRegionTsFileAndDeletionSource source =
+        new TestablePipeHistoricalDataRegionTsFileAndDeletionSource();
+    final Event expectedEvent = new Event() {};
+    final File tempDir = Files.createTempDirectory("pipeHistoricalTsFileCrossPartition").toFile();
+
+    try {
+      final TsFileResource partition0Progress100 =
+          createTsFileResource(tempDir, 0L, "100-1-0-0.tsfile");
+      partition0Progress100.updateProgressIndex(new SimpleProgressIndex(0, 100));
+      final TsFileResource partition1Progress20 =
+          createTsFileResource(tempDir, 1L, "20-1-0-0.tsfile");
+      partition1Progress20.updateProgressIndex(new SimpleProgressIndex(0, 20));
+
+      source.setSuppliedEvent(expectedEvent);
+      setPrivateField(source, "hasBeenStarted", true);
+      setPrivateField(source, "pipeName", "pipe");
+      setPrivateField(source, "creationTime", 1L);
+      setPrivateField(source, "pipeTaskMeta", new PipeTaskMeta(MinimumProgressIndex.INSTANCE, 1));
+      setPrivateField(source, "shouldOrderHistoricalTsFileByQueryPriority", true);
+      setPrivateField(source, "shouldExtractInsertion", true);
+      setPrivateField(source, "shouldExtractDeletion", false);
+      setPrivateField(
+          source,
+          "pendingQueue",
+          new ArrayDeque<PersistentResource>(
+              Arrays.asList(partition0Progress100, partition1Progress20)));
+      ((Set<PersistentResource>) getPrivateField(source, "historicalProgressReportResources"))
+          .add(partition0Progress100);
+      ((Set<PersistentResource>) getPrivateField(source, "historicalProgressReportResources"))
+          .add(partition1Progress20);
+
+      Assert.assertSame(expectedEvent, source.supply());
+      final Event partition0ProgressEvent = source.supply();
+      Assert.assertTrue(partition0ProgressEvent instanceof ProgressReportEvent);
+      final ProgressIndex partition0ProgressIndex =
+          ((ProgressReportEvent) partition0ProgressEvent).getProgressIndex();
+      Assert.assertEquals(
+          new TimePartitionProgressIndex(
+              partition0Progress100.getTimePartition(),
+              partition0Progress100.getMaxProgressIndex()),
+          partition0ProgressIndex);
+      Assert.assertFalse(
+          ((TimePartitionProgressIndex) partition0ProgressIndex)
+              .isProgressIndexEqualOrAfter(
+                  partition1Progress20.getTimePartition(),
+                  partition1Progress20.getMaxProgressIndex()));
+
+      Assert.assertSame(expectedEvent, source.supply());
+      final Event partition1ProgressEvent = source.supply();
+      Assert.assertTrue(partition1ProgressEvent instanceof ProgressReportEvent);
+      Assert.assertEquals(
+          new TimePartitionProgressIndex(
+              partition1Progress20.getTimePartition(), partition1Progress20.getMaxProgressIndex()),
+          ((ProgressReportEvent) partition1ProgressEvent).getProgressIndex());
+    } finally {
+      FileUtils.deleteFileOrDirectory(tempDir);
+    }
+  }
+
+  @Test
+  @SuppressWarnings("unchecked")
   public void testQueryPriorityOrderSuppliesProgressAfterSafeTsFileEvent() throws Exception {
     final TestablePipeHistoricalDataRegionTsFileAndDeletionSource source =
         new TestablePipeHistoricalDataRegionTsFileAndDeletionSource();
@@ -455,7 +546,8 @@ public class PipeHistoricalDataRegionTsFileAndDeletionSourceTest {
       final Event progressEvent = source.supply();
       Assert.assertTrue(progressEvent instanceof ProgressReportEvent);
       Assert.assertEquals(
-          firstResource.getMaxProgressIndex(),
+          new TimePartitionProgressIndex(
+              firstResource.getTimePartition(), firstResource.getMaxProgressIndex()),
           ((ProgressReportEvent) progressEvent).getProgressIndex());
       Assert.assertSame(expectedEvent, source.supply());
     } finally {
@@ -534,6 +626,44 @@ public class PipeHistoricalDataRegionTsFileAndDeletionSourceTest {
     }
   }
 
+  @Test
+  public void testMayTsFileContainUnprocessedDataUsesTimePartitionProgressCoverage()
+      throws Exception {
+    final File tempDir = Files.createTempDirectory("pipeHistoricalPartitionCoverage").toFile();
+
+    try {
+      final ProgressIndex startIndex =
+          new TimePartitionProgressIndex(0L, new SimpleProgressIndex(0, 100));
+      assertMayTsFileContainUnprocessedData(
+          tempDir,
+          0L,
+          "partition-covered.tsfile",
+          startIndex,
+          new SimpleProgressIndex(0, 50),
+          false);
+      assertMayTsFileContainUnprocessedData(
+          tempDir,
+          1L,
+          "partition-uncovered.tsfile",
+          startIndex,
+          new SimpleProgressIndex(0, 50),
+          true);
+
+      final ProgressIndex hybridStartIndex =
+          hybridProgressIndex(
+              startIndex, new RecoverProgressIndex(-1, new SimpleProgressIndex(0, 1)));
+      assertMayTsFileContainUnprocessedData(
+          tempDir,
+          0L,
+          "hybrid-partition-covered.tsfile",
+          hybridStartIndex,
+          new SimpleProgressIndex(0, 80),
+          false);
+    } finally {
+      FileUtils.deleteFileOrDirectory(tempDir);
+    }
+  }
+
   private static TsFileResource createTsFileResource(final File tempDir, final String fileName)
       throws IOException {
     final File file = new File(tempDir, fileName);
@@ -541,10 +671,30 @@ public class PipeHistoricalDataRegionTsFileAndDeletionSourceTest {
     return new TsFileResource(file);
   }
 
+  private static TsFileResource createTsFileResource(
+      final File tempDir, final long timePartitionId, final String fileName) throws IOException {
+    final File regionDir = new File(tempDir, "1");
+    final File partitionDir = new File(regionDir, String.valueOf(timePartitionId));
+    Assert.assertTrue(partitionDir.exists() || partitionDir.mkdirs());
+    return createTsFileResource(partitionDir, fileName);
+  }
+
   private static TsFileResource createClosedTsFileResource(
       final File tempDir, final String fileName, final ProgressIndex progressIndex)
       throws IOException {
     final TsFileResource resource = createTsFileResource(tempDir, fileName);
+    resource.setStatusForTest(TsFileResourceStatus.NORMAL);
+    resource.updateProgressIndex(progressIndex);
+    return resource;
+  }
+
+  private static TsFileResource createClosedTsFileResource(
+      final File tempDir,
+      final long timePartitionId,
+      final String fileName,
+      final ProgressIndex progressIndex)
+      throws IOException {
+    final TsFileResource resource = createTsFileResource(tempDir, timePartitionId, fileName);
     resource.setStatusForTest(TsFileResourceStatus.NORMAL);
     resource.updateProgressIndex(progressIndex);
     return resource;
@@ -557,8 +707,27 @@ public class PipeHistoricalDataRegionTsFileAndDeletionSourceTest {
       final ProgressIndex resourceProgressIndex,
       final boolean expected)
       throws Exception {
-    Assert.assertEquals(!expected, startIndex.isEqualOrAfter(resourceProgressIndex));
+    assertMayTsFileContainUnprocessedData(
+        startIndex, createClosedTsFileResource(tempDir, fileName, resourceProgressIndex), expected);
+  }
 
+  private static void assertMayTsFileContainUnprocessedData(
+      final File tempDir,
+      final long timePartitionId,
+      final String fileName,
+      final ProgressIndex startIndex,
+      final ProgressIndex resourceProgressIndex,
+      final boolean expected)
+      throws Exception {
+    assertMayTsFileContainUnprocessedData(
+        startIndex,
+        createClosedTsFileResource(tempDir, timePartitionId, fileName, resourceProgressIndex),
+        expected);
+  }
+
+  private static void assertMayTsFileContainUnprocessedData(
+      final ProgressIndex startIndex, final TsFileResource resource, final boolean expected)
+      throws Exception {
     final PipeHistoricalDataRegionTsFileAndDeletionSource source =
         new PipeHistoricalDataRegionTsFileAndDeletionSource();
     setPrivateField(source, "pipeName", "pipe");
@@ -569,10 +738,7 @@ public class PipeHistoricalDataRegionTsFileAndDeletionSourceTest {
         PipeHistoricalDataRegionTsFileAndDeletionSource.class.getDeclaredMethod(
             "mayTsFileContainUnprocessedData", TsFileResource.class);
     method.setAccessible(true);
-    Assert.assertEquals(
-        expected,
-        method.invoke(
-            source, createClosedTsFileResource(tempDir, fileName, resourceProgressIndex)));
+    Assert.assertEquals(expected, method.invoke(source, resource));
   }
 
   private static ProgressIndex hybridProgressIndex(
