@@ -391,6 +391,79 @@ public class PipeHistoricalDataRegionTsFileAndDeletionSourceTest {
   }
 
   @Test
+  @SuppressWarnings("unchecked")
+  public void testQueryPriorityOrderPreparesIncrementalSafeProgressReports() throws Exception {
+    final PipeHistoricalDataRegionTsFileAndDeletionSource source =
+        new PipeHistoricalDataRegionTsFileAndDeletionSource();
+    final File tempDir =
+        Files.createTempDirectory("pipeHistoricalTsFileIncrementalProgress").toFile();
+
+    try {
+      final TsFileResource progress1 = createTsFileResource(tempDir, "1.tsfile");
+      progress1.updateProgressIndex(new SimpleProgressIndex(0, 1));
+      final TsFileResource progress2 = createTsFileResource(tempDir, "2.tsfile");
+      progress2.updateProgressIndex(new SimpleProgressIndex(0, 2));
+      final TsFileResource progress4 = createTsFileResource(tempDir, "4.tsfile");
+      progress4.updateProgressIndex(new SimpleProgressIndex(0, 4));
+      final TsFileResource progress3 = createTsFileResource(tempDir, "3.tsfile");
+      progress3.updateProgressIndex(new SimpleProgressIndex(0, 3));
+      final TsFileResource progress5 = createTsFileResource(tempDir, "5.tsfile");
+      progress5.updateProgressIndex(new SimpleProgressIndex(0, 5));
+
+      final List<PersistentResource> resources =
+          new ArrayList<>(Arrays.asList(progress1, progress2, progress4, progress3, progress5));
+      prepareProgressReportResourcesForHistoricalTsFileQueryPriorityOrder(source, resources);
+
+      Assert.assertEquals(
+          new HashSet<>(Arrays.asList(progress1, progress2, progress3, progress5)),
+          getPrivateField(source, "historicalProgressReportResources"));
+    } finally {
+      FileUtils.deleteFileOrDirectory(tempDir);
+    }
+  }
+
+  @Test
+  @SuppressWarnings("unchecked")
+  public void testQueryPriorityOrderSuppliesProgressAfterSafeTsFileEvent() throws Exception {
+    final TestablePipeHistoricalDataRegionTsFileAndDeletionSource source =
+        new TestablePipeHistoricalDataRegionTsFileAndDeletionSource();
+    final Event expectedEvent = new Event() {};
+    final File tempDir = Files.createTempDirectory("pipeHistoricalTsFileSafeProgress").toFile();
+
+    try {
+      final TsFileResource firstResource = createTsFileResource(tempDir, "first.tsfile");
+      firstResource.updateProgressIndex(new SimpleProgressIndex(0, 1));
+      final TsFileResource secondResource = createTsFileResource(tempDir, "second.tsfile");
+      secondResource.updateProgressIndex(new SimpleProgressIndex(0, 2));
+
+      source.setSuppliedEvent(expectedEvent);
+      setPrivateField(source, "hasBeenStarted", true);
+      setPrivateField(source, "pipeName", "pipe");
+      setPrivateField(source, "creationTime", 1L);
+      setPrivateField(source, "pipeTaskMeta", new PipeTaskMeta(MinimumProgressIndex.INSTANCE, 1));
+      setPrivateField(source, "shouldOrderHistoricalTsFileByQueryPriority", true);
+      setPrivateField(source, "shouldExtractInsertion", true);
+      setPrivateField(source, "shouldExtractDeletion", false);
+      setPrivateField(
+          source,
+          "pendingQueue",
+          new ArrayDeque<PersistentResource>(Arrays.asList(firstResource, secondResource)));
+      ((Set<PersistentResource>) getPrivateField(source, "historicalProgressReportResources"))
+          .add(firstResource);
+
+      Assert.assertSame(expectedEvent, source.supply());
+      final Event progressEvent = source.supply();
+      Assert.assertTrue(progressEvent instanceof ProgressReportEvent);
+      Assert.assertEquals(
+          firstResource.getMaxProgressIndex(),
+          ((ProgressReportEvent) progressEvent).getProgressIndex());
+      Assert.assertSame(expectedEvent, source.supply());
+    } finally {
+      FileUtils.deleteFileOrDirectory(tempDir);
+    }
+  }
+
+  @Test
   public void testReplicateIndexShouldBeStableBeforeResourceConsumed() throws Exception {
     final TestablePipeHistoricalDataRegionTsFileAndDeletionSource source =
         new TestablePipeHistoricalDataRegionTsFileAndDeletionSource();
@@ -529,6 +602,17 @@ public class PipeHistoricalDataRegionTsFileAndDeletionSourceTest {
     final Method method =
         PipeHistoricalDataRegionTsFileAndDeletionSource.class.getDeclaredMethod(
             "prepareResourcesForHistoricalTsFileQueryPriorityOrder", List.class);
+    method.setAccessible(true);
+    method.invoke(source, resources);
+  }
+
+  private static void prepareProgressReportResourcesForHistoricalTsFileQueryPriorityOrder(
+      final PipeHistoricalDataRegionTsFileAndDeletionSource source,
+      final List<PersistentResource> resources)
+      throws ReflectiveOperationException {
+    final Method method =
+        PipeHistoricalDataRegionTsFileAndDeletionSource.class.getDeclaredMethod(
+            "prepareProgressReportResourcesForHistoricalTsFileQueryPriorityOrder", List.class);
     method.setAccessible(true);
     method.invoke(source, resources);
   }

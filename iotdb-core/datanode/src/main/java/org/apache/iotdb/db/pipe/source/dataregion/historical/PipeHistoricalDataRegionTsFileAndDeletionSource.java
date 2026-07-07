@@ -81,6 +81,7 @@ import java.util.ArrayList;
 import java.util.Arrays;
 import java.util.Collections;
 import java.util.HashMap;
+import java.util.HashSet;
 import java.util.List;
 import java.util.Map;
 import java.util.Objects;
@@ -177,7 +178,10 @@ public class PipeHistoricalDataRegionTsFileAndDeletionSource
       new HashMap<>();
   private final Map<PersistentResource, Long> pendingResource2ReplicateIndexForIoTV2 =
       new HashMap<>();
+  private final Set<PersistentResource> historicalProgressReportResources = new HashSet<>();
   private ProgressIndex maxHistoricalProgressIndex = MinimumProgressIndex.INSTANCE;
+  private ProgressIndex maxSuppliedHistoricalProgressReportIndex = MinimumProgressIndex.INSTANCE;
+  private ProgressIndex pendingHistoricalProgressIndexToReport;
   private boolean shouldReportMaxHistoricalProgressIndex = false;
   private int extractedHistoricalTsFileCount = 0;
   private int extractedHistoricalDeletionCount = 0;
@@ -519,7 +523,10 @@ public class PipeHistoricalDataRegionTsFileAndDeletionSource
     extractedHistoricalTsFileCount = 0;
     extractedHistoricalDeletionCount = 0;
     maxHistoricalProgressIndex = MinimumProgressIndex.INSTANCE;
+    maxSuppliedHistoricalProgressReportIndex = MinimumProgressIndex.INSTANCE;
+    pendingHistoricalProgressIndexToReport = null;
     shouldReportMaxHistoricalProgressIndex = false;
+    historicalProgressReportResources.clear();
 
     final DataRegion dataRegion =
         StorageEngine.getInstance().getDataRegion(new DataRegionId(dataRegionId));
@@ -543,15 +550,17 @@ public class PipeHistoricalDataRegionTsFileAndDeletionSource
             .ifPresent(manager -> extractDeletions(manager, originalResourceList));
       }
 
-      if (shouldUseHistoricalTsFileQueryPriorityOrder()) {
-        prepareResourcesForHistoricalTsFileQueryPriorityOrder(originalResourceList);
-      }
-
       // Sort tsFileResource and deletionResource
       long startTime = System.currentTimeMillis();
       LOGGER.info(
           DataNodePipeMessages.PIPE_START_TO_SORT_ALL_EXTRACTED_RESOURCES, pipeName, dataRegionId);
+      if (shouldUseHistoricalTsFileQueryPriorityOrder()) {
+        prepareResourcesForHistoricalTsFileQueryPriorityOrder(originalResourceList);
+      }
       sortExtractedResources(originalResourceList);
+      if (shouldUseHistoricalTsFileQueryPriorityOrder()) {
+        prepareProgressReportResourcesForHistoricalTsFileQueryPriorityOrder(originalResourceList);
+      }
       pendingQueue = new ArrayDeque<>(originalResourceList);
       PipeTerminateEvent.initializeHistoricalTransferSummary(
           pipeName,
@@ -580,15 +589,48 @@ public class PipeHistoricalDataRegionTsFileAndDeletionSource
 
   private void prepareResourcesForHistoricalTsFileQueryPriorityOrder(
       final List<PersistentResource> resourceList) {
-    // Query-priority order is intentionally not compatible with progressIndex order, so report
-    // progress only after all selected historical TsFiles are supplied. This prefers possible
-    // retransmission over losing overwrite semantics.
+    // Query-priority order is intentionally not compatible with progressIndex order, so only
+    // selected historical TsFiles should participate in query-order progress reports.
     resourceList.removeIf(
         resource ->
             resource instanceof TsFileResource
                 && !filteredTsFileResources2TableNames.containsKey(resource));
     updateMaxHistoricalProgressIndex(resourceList);
     shouldReportMaxHistoricalProgressIndex = !resourceList.isEmpty();
+  }
+
+  private void prepareProgressReportResourcesForHistoricalTsFileQueryPriorityOrder(
+      final List<PersistentResource> resourceList) {
+    historicalProgressReportResources.clear();
+    final List<ProgressIndex> remainingMinimalProgressIndexes = new ArrayList<>();
+    for (int i = resourceList.size() - 1; i >= 0; --i) {
+      final PersistentResource resource = resourceList.get(i);
+      final ProgressIndex progressIndex = resource.getProgressIndex();
+      if (Objects.isNull(progressIndex)) {
+        continue;
+      }
+
+      // A resource can report progress only if that progress will not cover any later resource.
+      // Otherwise a restart may skip untransferred data.
+      if (remainingMinimalProgressIndexes.stream().noneMatch(progressIndex::isEqualOrAfter)) {
+        historicalProgressReportResources.add(resource);
+      }
+      updateRemainingMinimalProgressIndexes(remainingMinimalProgressIndexes, progressIndex);
+    }
+  }
+
+  private void updateRemainingMinimalProgressIndexes(
+      final List<ProgressIndex> remainingMinimalProgressIndexes,
+      final ProgressIndex progressIndex) {
+    if (remainingMinimalProgressIndexes.stream().anyMatch(progressIndex::isEqualOrAfter)) {
+      return;
+    }
+
+    // Keep only suffix minimal progress indexes. They are sufficient to test whether a new
+    // progress index covers any remaining resource.
+    remainingMinimalProgressIndexes.removeIf(
+        minimalProgressIndex -> minimalProgressIndex.isEqualOrAfter(progressIndex));
+    remainingMinimalProgressIndexes.add(progressIndex);
   }
 
   private void updateMaxHistoricalProgressIndex(final List<PersistentResource> resourceList) {
@@ -983,6 +1025,12 @@ public class PipeHistoricalDataRegionTsFileAndDeletionSource
       start();
     }
 
+    if (Objects.nonNull(pendingHistoricalProgressIndexToReport)) {
+      final ProgressIndex progressIndex = pendingHistoricalProgressIndexToReport;
+      pendingHistoricalProgressIndexToReport = null;
+      return supplyHistoricalProgressReportEvent(progressIndex);
+    }
+
     if (Objects.isNull(pendingQueue)) {
       return null;
     }
@@ -992,7 +1040,10 @@ public class PipeHistoricalDataRegionTsFileAndDeletionSource
       if (resource == null) {
         if (shouldReportMaxHistoricalProgressIndex) {
           shouldReportMaxHistoricalProgressIndex = false;
-          return supplyProgressReportEvent(maxHistoricalProgressIndex);
+          if (!maxSuppliedHistoricalProgressReportIndex.isEqualOrAfter(
+              maxHistoricalProgressIndex)) {
+            return supplyHistoricalProgressReportEvent(maxHistoricalProgressIndex);
+          }
         }
         return supplyTerminateEvent();
       }
@@ -1003,6 +1054,9 @@ public class PipeHistoricalDataRegionTsFileAndDeletionSource
           clearReplicateIndexForResource(tsFileResource);
           pendingQueue.poll();
           if (shouldUseHistoricalTsFileQueryPriorityOrder()) {
+            if (shouldReportHistoricalProgressAfterResource(tsFileResource)) {
+              return supplyHistoricalProgressReportEvent(tsFileResource.getMaxProgressIndex());
+            }
             continue;
           }
           return supplyProgressReportEvent(tsFileResource.getMaxProgressIndex());
@@ -1010,6 +1064,9 @@ public class PipeHistoricalDataRegionTsFileAndDeletionSource
 
         final Event event = supplyTsFileEvent(tsFileResource);
         pendingQueue.poll();
+        if (Objects.nonNull(event) && shouldReportHistoricalProgressAfterResource(tsFileResource)) {
+          pendingHistoricalProgressIndexToReport = tsFileResource.getMaxProgressIndex();
+        }
         return event;
       }
 
@@ -1017,6 +1074,11 @@ public class PipeHistoricalDataRegionTsFileAndDeletionSource
       pendingQueue.poll();
       return event;
     }
+  }
+
+  private boolean shouldReportHistoricalProgressAfterResource(final PersistentResource resource) {
+    return shouldUseHistoricalTsFileQueryPriorityOrder()
+        && historicalProgressReportResources.remove(resource);
   }
 
   private Event supplyTerminateEvent() {
@@ -1092,6 +1154,13 @@ public class PipeHistoricalDataRegionTsFileAndDeletionSource
           DataNodePipeMessages.THE_REFERENCE_COUNT_OF_THE_EVENT_CANNOT, progressReportEvent);
     }
     return isReferenceCountIncreased ? progressReportEvent : null;
+  }
+
+  private Event supplyHistoricalProgressReportEvent(final ProgressIndex progressIndex) {
+    maxSuppliedHistoricalProgressReportIndex =
+        maxSuppliedHistoricalProgressReportIndex.updateToMinimumEqualOrIsAfterProgressIndex(
+            progressIndex);
+    return supplyProgressReportEvent(progressIndex);
   }
 
   protected Event supplyTsFileEvent(final TsFileResource resource) {
@@ -1293,5 +1362,7 @@ public class PipeHistoricalDataRegionTsFileAndDeletionSource
       pendingQueue = null;
     }
     pendingResource2ReplicateIndexForIoTV2.clear();
+    historicalProgressReportResources.clear();
+    pendingHistoricalProgressIndexToReport = null;
   }
 }
