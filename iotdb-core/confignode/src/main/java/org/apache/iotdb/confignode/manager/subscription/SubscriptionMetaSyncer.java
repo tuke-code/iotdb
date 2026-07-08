@@ -127,7 +127,9 @@ public class SubscriptionMetaSyncer {
     if (commitProgressSyncStatus.getCode() != TSStatusCode.SUCCESS_STATUS.getStatusCode()) {
       if (syncFailureLogThrottler.shouldLog(
           "commit-progress-sync", getStatusFailureSignature(commitProgressSyncStatus))) {
-        LOGGER.warn("Failed to sync commit progress. Result status: {}.", commitProgressSyncStatus);
+        LOGGER.warn(
+            ManagerMessages.LOG_FAILED_SYNC_COMMIT_PROGRESS_RESULT_STATUS_ARG_A9E46E80,
+            commitProgressSyncStatus);
       }
       return;
     }

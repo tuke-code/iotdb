@@ -130,6 +130,14 @@ public class FolderManager {
                 foldersStates.getOrDefault(folder, FolderState.ABNORMAL) == FolderState.HEALTHY);
   }
 
+  private boolean hasFolderWithAvailableDiskSpace() {
+    return folders.stream()
+        .anyMatch(
+            folder ->
+                foldersStates.getOrDefault(folder, FolderState.ABNORMAL) == FolderState.HEALTHY
+                    && JVMCommonUtils.hasSpace(folder));
+  }
+
   @FunctionalInterface
   public interface ThrowingFunction<T, R, E extends Exception> {
     R apply(T t) throws E;
@@ -165,12 +173,16 @@ public class FolderManager {
   }
 
   private void handleAllFoldersFull(DiskSpaceInsufficientException e) {
-    logAllFoldersFullIfNecessary(e);
-    CommonConfig commonConfig = CommonDescriptor.getInstance().getConfig();
-    if (!NodeStatus.ReadOnly.equals(commonConfig.getNodeStatus())) {
-      commonConfig.setNodeStatus(NodeStatus.ReadOnly);
+    if (!hasFolderWithAvailableDiskSpace()) {
+      logAllFoldersFullIfNecessary(e);
+      CommonConfig commonConfig = CommonDescriptor.getInstance().getConfig();
+      if (!NodeStatus.ReadOnly.equals(commonConfig.getNodeStatus())) {
+        commonConfig.setNodeStatus(NodeStatus.ReadOnly);
+      }
+      commonConfig.setStatusReason(NodeStatus.DISK_FULL);
+    } else {
+      logger.warn(UtilMessages.CANNOT_SELECT_FOLDER_BUT_DISK_HAS_SPACE, e);
     }
-    commonConfig.setStatusReason(NodeStatus.DISK_FULL);
   }
 
   void logAllFoldersFullIfNecessary(DiskSpaceInsufficientException e) {

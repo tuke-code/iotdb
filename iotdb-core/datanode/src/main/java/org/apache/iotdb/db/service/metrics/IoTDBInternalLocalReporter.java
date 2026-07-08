@@ -82,10 +82,6 @@ public class IoTDBInternalLocalReporter extends IoTDBInternalReporter {
 
   private static final Logger LOGGER = LoggerFactory.getLogger(IoTDBInternalLocalReporter.class);
   static final long FAILURE_LOG_INTERVAL = TimeUnit.MINUTES.toMillis(5);
-  private static final String UPDATE_METRIC_CONNECTION_FAILURE =
-      "Failed to update the value of metric because of connection failure, because ";
-  private static final String UPDATE_METRIC_INTERNAL_FAILURE =
-      "Failed to update the value of metric because of internal error, because ";
   private final SessionManager sessionManager;
   private final Coordinator coordinator;
   private final SessionInfo sessionInfo;
@@ -283,14 +279,20 @@ public class IoTDBInternalLocalReporter extends IoTDBInternalReporter {
       String prefix, IoTDBConnectionException e) {
     if (shouldLogFailure(
         updateMetricConnectionFailureLogStates, prefix, getExceptionFailureSignature(e))) {
-      LOGGER.warn(UPDATE_METRIC_CONNECTION_FAILURE, e);
+      LOGGER.warn(
+          DataNodeMiscMessages
+              .MISC_LOG_FAILED_TO_UPDATE_THE_VALUE_OF_METRIC_BECAUSE_OF_CONNECTION_B0FC4929,
+          e);
     }
   }
 
   private void logUpdateMetricInternalFailureIfNecessary(String prefix, Exception e) {
     if (shouldLogFailure(
         updateMetricInternalFailureLogStates, prefix, getExceptionFailureSignature(e))) {
-      LOGGER.warn(UPDATE_METRIC_INTERNAL_FAILURE, e);
+      LOGGER.warn(
+          DataNodeMiscMessages
+              .MISC_LOG_FAILED_TO_UPDATE_THE_VALUE_OF_METRIC_BECAUSE_OF_INTERNAL_E5C64806,
+          e);
     }
   }
 
