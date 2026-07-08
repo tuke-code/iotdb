@@ -27,7 +27,12 @@ import jakarta.ws.rs.core.Response;
 
 public final class QueryRowLimitUtils {
 
-  private static final int MIN_ROW_SIZE_LIMIT = 1;
+  /**
+   * Fallback used when {@code rest_query_default_row_size_limit} is missing or non-positive.
+   * Matches the built-in default in {@code IoTDBRestServiceConfig}; a non-positive configured value
+   * used to mean "unlimited" and is now treated as this cap instead of being clamped down to 1.
+   */
+  private static final int DEFAULT_ROW_SIZE_LIMIT = 10000;
 
   private QueryRowLimitUtils() {}
 
@@ -41,7 +46,7 @@ public final class QueryRowLimitUtils {
   }
 
   public static int normalizeRowSizeLimit(int rowSizeLimit) {
-    return Math.max(MIN_ROW_SIZE_LIMIT, rowSizeLimit);
+    return rowSizeLimit > 0 ? rowSizeLimit : DEFAULT_ROW_SIZE_LIMIT;
   }
 
   public static boolean exceedsLimit(
