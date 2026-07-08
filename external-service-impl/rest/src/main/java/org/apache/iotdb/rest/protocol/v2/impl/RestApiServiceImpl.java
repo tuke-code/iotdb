@@ -47,6 +47,7 @@ import org.apache.iotdb.db.schemaengine.schemaregion.ISchemaRegion;
 import org.apache.iotdb.db.utils.CommonUtils;
 import org.apache.iotdb.db.utils.SetThreadName;
 import org.apache.iotdb.rest.protocol.handler.AuthorizationHandler;
+import org.apache.iotdb.rest.protocol.handler.QueryRowLimitUtils;
 import org.apache.iotdb.rest.protocol.model.ExecutionStatus;
 import org.apache.iotdb.rest.protocol.utils.InsertTabletSortDataUtils;
 import org.apache.iotdb.rest.protocol.v2.NotFoundException;
@@ -99,14 +100,15 @@ public class RestApiServiceImpl extends RestApiService {
   private final ISchemaFetcher schemaFetcher;
   private final AuthorizationHandler authorizationHandler;
 
-  private final Integer defaultQueryRowLimit;
+  private final int defaultQueryRowLimit;
 
   public RestApiServiceImpl() {
     partitionFetcher = ClusterPartitionFetcher.getInstance();
     schemaFetcher = ClusterSchemaFetcher.getInstance();
     authorizationHandler = new AuthorizationHandler();
     defaultQueryRowLimit =
-        IoTDBRestServiceDescriptor.getInstance().getConfig().getRestQueryDefaultRowSizeLimit();
+        QueryRowLimitUtils.normalizeRowSizeLimit(
+            IoTDBRestServiceDescriptor.getInstance().getConfig().getRestQueryDefaultRowSizeLimit());
   }
 
   @Override
@@ -187,6 +189,7 @@ public class RestApiServiceImpl extends RestApiService {
       List<Object> timeseries = new ArrayList<>();
       List<Object> valueList = new ArrayList<>();
       List<Object> dataTypeList = new ArrayList<>();
+      int fetched = 0;
 
       for (final Map.Entry<TableId, Map<IDeviceID, Map<String, Pair<TSDataType, TimeValuePair>>>>
           result : resultMap.entrySet()) {
@@ -201,10 +204,14 @@ public class RestApiServiceImpl extends RestApiService {
                 || tvPair.getValue() == null) {
               continue;
             }
+            if (QueryRowLimitUtils.exceedsLimit(fetched, 1, defaultQueryRowLimit)) {
+              return QueryRowLimitUtils.buildRowSizeLimitExceededResponse(defaultQueryRowLimit);
+            }
             valueList.add(tvPair.getValue().getStringValue());
             dataTypeList.add(tvPair.getValue().getDataType().name());
             targetDataSet.addTimestampsItem(tvPair.getTimestamp());
             timeseries.add(deviceWithSeparator + measurementLastEntry.getKey());
+            fetched++;
           }
         }
       }
@@ -398,7 +405,7 @@ public class RestApiServiceImpl extends RestApiService {
         return QueryDataSetHandler.fillQueryDataSet(
             queryExecution,
             statement,
-            sql.getRowLimit() == null ? defaultQueryRowLimit : sql.getRowLimit());
+            QueryRowLimitUtils.resolveActualRowSizeLimit(sql.getRowLimit(), defaultQueryRowLimit));
       }
     } catch (Exception e) {
       finish = true;
