@@ -96,6 +96,7 @@ import static org.apache.iotdb.db.queryengine.plan.execution.config.TableConfigT
 public class AnalyzeUtils {
 
   private static final int ATTRIBUTE_FILTER_DELETE_DEVICE_IN_LIMIT = 1000;
+  private static final int DELETE_DNF_EXPRESSION_LIMIT = 1000;
   private static final CommonQueryAstVisitor<PredicateParseResult, PredicateParseContext>
       DELETION_PREDICATE_PARSE_VISITOR =
           new CommonQueryAstVisitor<>() {
@@ -455,14 +456,18 @@ public class AnalyzeUtils {
   }
 
   /**
-   * Convert to a disjunctive normal forms.
+   * Convert to disjunctive normal forms.
    *
    * <p>For example: ( A | B ) & ( C | D ) => ( A & C ) | ( A & D ) | ( B & C ) | ( B & D)
    *
-   * <p>Returns the original expression if the expression is null or if the distribution will expand
-   * the expression by too much.
+   * <p>Throws SemanticException if the distribution will expand the expression by too much.
    */
   public static List<Expression> toDisjunctiveNormalForms(Expression expression) {
+    return toDisjunctiveNormalForms(expression, DELETE_DNF_EXPRESSION_LIMIT);
+  }
+
+  private static List<Expression> toDisjunctiveNormalForms(
+      Expression expression, int expressionLimit) {
     if (!(expression instanceof LogicalExpression)) {
       return Collections.singletonList(expression);
     }
@@ -472,20 +477,24 @@ public class AnalyzeUtils {
       // ( A | B ) & ( C | D ) => ( A & C ) | ( A & D ) | ( B & C ) | ( B & D)
       List<Expression> results = null;
       for (Expression term : logicalExpression.getTerms()) {
+        List<Expression> termResults = toDisjunctiveNormalForms(term, expressionLimit);
         if (results == null) {
-          results = toDisjunctiveNormalForms(term);
+          results = termResults;
         } else {
           results =
               crossProductOfDisjunctiveNormalForms(
-                  results, toDisjunctiveNormalForms(term), Operator.AND);
+                  results, termResults, Operator.AND, expressionLimit);
         }
+        ensureDnfExpressionLimit(results.size(), expressionLimit);
       }
       return results;
     } else if (logicalExpression.getOperator() == Operator.OR) {
       // ( A | B ) | ( C | D ) => A | B | C | D
       List<Expression> results = new ArrayList<>();
       for (Expression term : logicalExpression.getTerms()) {
-        results.addAll(toDisjunctiveNormalForms(term));
+        List<Expression> termResults = toDisjunctiveNormalForms(term, expressionLimit);
+        ensureDnfExpressionLimit((long) results.size() + termResults.size(), expressionLimit);
+        results.addAll(termResults);
       }
       return results;
     } else {
@@ -495,8 +504,12 @@ public class AnalyzeUtils {
   }
 
   private static List<Expression> crossProductOfDisjunctiveNormalForms(
-      List<Expression> leftList, List<Expression> rightList, Operator operator) {
-    List<Expression> results = new ArrayList<>();
+      List<Expression> leftList,
+      List<Expression> rightList,
+      Operator operator,
+      int expressionLimit) {
+    ensureDnfExpressionLimit((long) leftList.size() * rightList.size(), expressionLimit);
+    List<Expression> results = new ArrayList<>(leftList.size() * rightList.size());
     for (Expression leftExp : leftList) {
       for (Expression rightExp : rightList) {
         List<Expression> terms = new ArrayList<>();
@@ -516,6 +529,17 @@ public class AnalyzeUtils {
       }
     }
     return results;
+  }
+
+  private static void ensureDnfExpressionLimit(final long expressionSize, final int limit) {
+    if (expressionSize > limit) {
+      throw new SemanticException(
+          String.format(
+              DataNodeQueryMessages
+                  .EXCEPTION_DELETION_PREDICATE_EXPANDS_TO_TOO_MANY_DISJUNCTIVE_TERMS_ARG_LIMIT_IS_ARG_PLEASE_SIMPLIFY_THE_OR_CONDITIONS_BA138588,
+              expressionSize,
+              limit));
+    }
   }
 
   private static TableDeletionEntry parsePredicate(

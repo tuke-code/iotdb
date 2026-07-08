@@ -319,6 +319,10 @@ public final class DataNodeQueryMessages {
       "列 '%s' 不存在或不是标签列";
   public static final String TOO_MANY_DEVICES_MATCHED_BY_ATTRIBUTE_FILTERS_IN_DELETION =
       "删除语句中的属性过滤条件匹配了过多设备（%d），限制为 %d。请移除所有属性过滤条件（%s），或进一步增加属性过滤条件。";
+  public static final String
+      EXCEPTION_DELETION_PREDICATE_EXPANDS_TO_TOO_MANY_DISJUNCTIVE_TERMS_ARG_LIMIT_IS_ARG_PLEASE_SIMPLIFY_THE_OR_CONDITIONS_BA138588 =
+          "删除谓词会展开为过多析取项（%d），限制为 %d。"
+              + "请简化 OR 条件。";
   public static final String ONLY_TIME_FILTERS_ARE_SUPPORTED_IN_LAST_QUERY =
       "LAST 查询中仅支持时间过滤器";
   public static final String VIEWS_CANNOT_BE_USED_IN_GROUP_BY_TAGS =

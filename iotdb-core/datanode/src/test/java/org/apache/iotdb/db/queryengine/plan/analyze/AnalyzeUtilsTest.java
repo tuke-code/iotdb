@@ -23,11 +23,14 @@ import org.apache.iotdb.common.rpc.thrift.TConsensusGroupId;
 import org.apache.iotdb.common.rpc.thrift.TConsensusGroupType;
 import org.apache.iotdb.common.rpc.thrift.TRegionReplicaSet;
 import org.apache.iotdb.common.rpc.thrift.TSStatus;
+import org.apache.iotdb.commons.exception.SemanticException;
 import org.apache.iotdb.commons.queryengine.plan.relational.sql.ast.ComparisonExpression;
 import org.apache.iotdb.commons.queryengine.plan.relational.sql.ast.Expression;
 import org.apache.iotdb.commons.queryengine.plan.relational.sql.ast.Identifier;
+import org.apache.iotdb.commons.queryengine.plan.relational.sql.ast.LogicalExpression;
 import org.apache.iotdb.commons.queryengine.plan.relational.sql.ast.LongLiteral;
 import org.apache.iotdb.commons.queryengine.plan.relational.sql.ast.QualifiedName;
+import org.apache.iotdb.commons.queryengine.plan.relational.sql.ast.StringLiteral;
 import org.apache.iotdb.commons.queryengine.plan.relational.sql.ast.Table;
 import org.apache.iotdb.commons.schema.table.TsTable;
 import org.apache.iotdb.commons.schema.table.column.TimeColumnSchema;
@@ -47,6 +50,7 @@ import org.junit.Test;
 import org.mockito.ArgumentCaptor;
 import org.mockito.Mockito;
 
+import java.util.ArrayList;
 import java.util.Arrays;
 import java.util.Collections;
 import java.util.HashSet;
@@ -54,6 +58,7 @@ import java.util.List;
 import java.util.Set;
 
 import static org.junit.Assert.assertEquals;
+import static org.junit.Assert.assertThrows;
 import static org.junit.Assert.assertTrue;
 
 public class AnalyzeUtilsTest {
@@ -75,6 +80,24 @@ public class AnalyzeUtilsTest {
     assertEquals(1, entries.size());
     assertEquals(Long.MIN_VALUE, entries.get(0).getStartTime());
     assertEquals(100, entries.get(0).getEndTime());
+  }
+
+  @Test
+  public void testDeletePredicateDnfExpansionWithinLimit() {
+    List<Expression> result =
+        AnalyzeUtils.toDisjunctiveNormalForms(buildConjunctiveOrExpression(9));
+
+    assertEquals(512, result.size());
+  }
+
+  @Test
+  public void testDeletePredicateDnfExpansionRejectsTooManyTerms() {
+    SemanticException exception =
+        assertThrows(
+            SemanticException.class,
+            () -> AnalyzeUtils.toDisjunctiveNormalForms(buildConjunctiveOrExpression(10)));
+
+    assertTrue(exception.getMessage().contains("too many disjunctive terms (1024)"));
   }
 
   @Test
@@ -116,6 +139,19 @@ public class AnalyzeUtilsTest {
     assertEquals("root.db1", requests.get(1).getDatabase());
     assertEquals(30, requests.get(1).getStartTime());
     assertEquals(40, requests.get(1).getEndTime());
+  }
+
+  private static Expression buildConjunctiveOrExpression(final int termCount) {
+    final List<Expression> terms = new ArrayList<>();
+    for (int i = 0; i < termCount; i++) {
+      terms.add(LogicalExpression.or(equalTag("tag" + i, "left"), equalTag("tag" + i, "right")));
+    }
+    return new LogicalExpression(LogicalExpression.Operator.AND, terms);
+  }
+
+  private static Expression equalTag(final String column, final String value) {
+    return new ComparisonExpression(
+        ComparisonExpression.Operator.EQUAL, new Identifier(column), new StringLiteral(value));
   }
 
   private static TGetRegionGroupsByTimeResp successRegionGroupsResp(
